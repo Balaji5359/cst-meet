@@ -1,96 +1,38 @@
-CST Meet – Day 1 Deployment
-📌 Project Overview
+# CST Meet – Day 1 Deployment
 
-CST Meet is a web-based meeting and collaboration platform designed for students and academic use.
-This repository contains the frontend application and its production deployment on AWS infrastructure.
+## Project Overview
+**CST Meet** is a web-based meeting and collaboration platform designed for students and academic use.  
+This repository contains the frontend application and its **production deployment on AWS infrastructure**.
 
-🛠️ Tech Stack (Day 1)
+---
 
-Frontend: Vite + HTML, CSS, JavaScript
+## Tech Stack (Day 1)
+- **Frontend**: Vite + HTML, CSS, JavaScript
+- **Web Server**: NGINX
+- **Cloud**: AWS EC2 (Ubuntu)
+- **Domain & SSL**: Custom domain with HTTPS (Certbot)
+- **Version Control**: Git & GitHub
 
-Web Server: NGINX
+---
 
-Cloud: AWS EC2 (Ubuntu)
+## Infrastructure Setup
+- **EC2 Instance**: Ubuntu Server
+- **Static Public IP**: Elastic IP
+- **Domain**: https://cstmeet.skillrouteai.com
+- **Web Server**: NGINX (configured using server blocks)
+- **SSL Certificate**: configured Encrypt 
 
-Domain & SSL: Custom domain with HTTPS (Certbot)
+---
 
-Version Control: Git & GitHub
-
-☁️ Infrastructure Setup
-
-EC2 Instance: Ubuntu Server
-
-Static Public IP: Elastic IP
-
-Domain: https://cstmeet.skillrouteai.com
-
-Web Server: NGINX configured with server blocks
-
-SSL: Let’s Encrypt (Auto-renew enabled)
-
-📂 Deployment Architecture
+## Deployment Architecture
+```text
 User Browser
      |
      v
 Custom Domain (HTTPS)
      |
      v
-NGINX (Reverse Proxy & Static Hosting)
+NGINX (Static Hosting & Reverse Proxy)
      |
      v
 Vite Production Build (dist/)
-
-⚙️ Deployment Steps (Summary)
-1️⃣ Server Preparation
-
-Launched fresh Ubuntu EC2 instance
-
-Installed required packages:
-
-nginx
-
-git
-
-node.js
-
-2️⃣ Frontend Setup
-
-Cloned GitHub repository
-
-Installed dependencies using npm
-
-Built production-ready assets using Vite (npm run build)
-
-Served dist/ folder via NGINX
-
-3️⃣ Domain Configuration
-
-Mapped custom domain to EC2 public IP using DNS (A record)
-
-Verified HTTP access
-
-4️⃣ HTTPS Enablement
-
-Installed Certbot
-
-Enabled SSL using Let’s Encrypt
-
-Configured automatic renewal (certbot renew --dry-run verified)
-
-🌐 Live Application
-
-🔗 URL: https://cstmeet.skillrouteai.com
-
-🔒 Security: HTTPS enabled with auto-renewing SSL certificate
-
-✅ Day 1 Outcomes
-
-✔️ Frontend deployed successfully
-
-✔️ Production build served via NGINX
-
-✔️ Custom domain connected
-
-✔️ HTTPS enabled (secure)
-
-✔️ Server ready for backend & AI integration
