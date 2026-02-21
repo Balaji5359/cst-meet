@@ -1,4 +1,11 @@
-const readEnv = (key) => {
+const readRuntimeEnv = (key) => {
+  if (typeof window === 'undefined') return ''
+  const runtimeConfig = window.RUNTIME_CONFIG || {}
+  const value = runtimeConfig[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+const readProcessEnv = (key) => {
   const processValue =
     typeof process !== 'undefined' && process?.env && typeof process.env[key] === 'string'
       ? process.env[key].trim()
@@ -13,6 +20,8 @@ const readEnv = (key) => {
 
   return viteValue
 }
+
+const readEnv = (key) => readRuntimeEnv(key) || readProcessEnv(key)
 
 export const cognitoConfig = {
   authority: readEnv('VITE_COGNITO_AUTHORITY'),
@@ -35,14 +44,3 @@ const requiredEnvKeys = [
 
 export const cognitoConfigErrors = requiredEnvKeys.filter((key) => !readEnv(key))
 export const hasCognitoConfig = cognitoConfigErrors.length === 0
-
-console.group('[Cognito Config Debug]')
-console.log('VITE_COGNITO_AUTHORITY:', readEnv('VITE_COGNITO_AUTHORITY'))
-console.log('VITE_COGNITO_CLIENT_ID:', readEnv('VITE_COGNITO_CLIENT_ID'))
-console.log('VITE_COGNITO_REDIRECT_URI:', readEnv('VITE_COGNITO_REDIRECT_URI'))
-console.log('VITE_COGNITO_SCOPE:', readEnv('VITE_COGNITO_SCOPE'))
-console.log('VITE_COGNITO_DOMAIN:', readEnv('VITE_COGNITO_DOMAIN'))
-console.log('VITE_COGNITO_LOGOUT_URI:', readEnv('VITE_COGNITO_LOGOUT_URI'))
-console.log('hasCognitoConfig:', hasCognitoConfig)
-console.log('cognitoConfigErrors:', cognitoConfigErrors)
-console.groupEnd()
