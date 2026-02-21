@@ -35,3 +35,14 @@ const requiredEnvKeys = [
 
 export const cognitoConfigErrors = requiredEnvKeys.filter((key) => !readEnv(key))
 export const hasCognitoConfig = cognitoConfigErrors.length === 0
+
+console.group('[Cognito Config Debug]')
+console.log('VITE_COGNITO_AUTHORITY:', readEnv('VITE_COGNITO_AUTHORITY'))
+console.log('VITE_COGNITO_CLIENT_ID:', readEnv('VITE_COGNITO_CLIENT_ID'))
+console.log('VITE_COGNITO_REDIRECT_URI:', readEnv('VITE_COGNITO_REDIRECT_URI'))
+console.log('VITE_COGNITO_SCOPE:', readEnv('VITE_COGNITO_SCOPE'))
+console.log('VITE_COGNITO_DOMAIN:', readEnv('VITE_COGNITO_DOMAIN'))
+console.log('VITE_COGNITO_LOGOUT_URI:', readEnv('VITE_COGNITO_LOGOUT_URI'))
+console.log('hasCognitoConfig:', hasCognitoConfig)
+console.log('cognitoConfigErrors:', cognitoConfigErrors)
+console.groupEnd()
