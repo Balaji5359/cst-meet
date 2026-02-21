@@ -1,0 +1,23 @@
+const readEnv = (key) => (import.meta.env[key] || '').trim()
+
+export const cognitoConfig = {
+  authority: readEnv('VITE_COGNITO_AUTHORITY'),
+  client_id: readEnv('VITE_COGNITO_CLIENT_ID'),
+  redirect_uri: readEnv('VITE_COGNITO_REDIRECT_URI'),
+  response_type: 'code',
+  scope: readEnv('VITE_COGNITO_SCOPE') || 'openid email profile',
+}
+
+export const cognitoDomain = readEnv('VITE_COGNITO_DOMAIN')
+export const logoutUri = readEnv('VITE_COGNITO_LOGOUT_URI')
+
+const requiredEnvKeys = [
+  'VITE_COGNITO_AUTHORITY',
+  'VITE_COGNITO_CLIENT_ID',
+  'VITE_COGNITO_REDIRECT_URI',
+  'VITE_COGNITO_DOMAIN',
+  'VITE_COGNITO_LOGOUT_URI',
+]
+
+export const cognitoConfigErrors = requiredEnvKeys.filter((key) => !readEnv(key))
+export const hasCognitoConfig = cognitoConfigErrors.length === 0
