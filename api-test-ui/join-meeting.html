@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Join Meeting</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <h1>Join Meeting</h1>
+      <label for="meetingId">Meeting ID</label>
+      <input id="meetingId" type="text" placeholder="meeting-id" />
+
+      <label for="userId">User Email / ID</label>
+      <input id="userId" type="text" placeholder="user@example.com" />
+
+      <button id="joinBtn" class="btn" type="button">Join Meeting</button>
+
+      <div id="message" class="message"></div>
+      <pre id="result" class="result"></pre>
+      <a class="back-link" href="index.html">Back to Dashboard</a>
+    </section>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script>
+    document.getElementById('joinBtn').addEventListener('click', async () => {
+      const meetingId = document.getElementById('meetingId').value.trim();
+      const userId = document.getElementById('userId').value.trim();
+      const message = document.getElementById('message');
+      const result = document.getElementById('result');
+      message.textContent = '';
+      result.textContent = '';
+
+      if (!meetingId || !userId) {
+        showError(message, 'Meeting ID and User Email/ID are required.');
+        return;
+      }
+
+      const response = await apiLambdaPost('/meeting/join', { meetingId, userId });
+
+      if (response.ok) {
+        showSuccess(message, 'Joined meeting successfully.');
+        result.textContent = JSON.stringify(response.data || { ok: true }, null, 2);
+      } else {
+        showError(message, formatHttpError(response.status, response.data));
+        result.textContent = formatRaw(response.rawText, response.data);
+      }
+    });
+  </script>
+</body>
+</html>

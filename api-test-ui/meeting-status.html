@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meeting Status</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <h1>Get Meeting Status</h1>
+      <label for="meetingId">Meeting ID</label>
+      <input id="meetingId" type="text" placeholder="meeting-id" />
+      <button id="statusBtn" class="btn" type="button">Check Status</button>
+
+      <div id="message" class="message"></div>
+      <pre id="result" class="result"></pre>
+      <a class="back-link" href="index.html">Back to Dashboard</a>
+    </section>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script>
+    document.getElementById('statusBtn').addEventListener('click', async () => {
+      const meetingId = document.getElementById('meetingId').value.trim();
+      const message = document.getElementById('message');
+      const result = document.getElementById('result');
+      message.textContent = '';
+      result.textContent = '';
+
+      if (!meetingId) {
+        showError(message, 'meetingId is required.');
+        return;
+      }
+
+      const response = await apiRequest(`/meeting/getid?meetingId=${encodeURIComponent(meetingId)}`, {
+        method: 'GET'
+      });
+
+      if (response.ok) {
+        const data = response.data || {};
+        showSuccess(message, 'Status fetched successfully.');
+        result.textContent = JSON.stringify({
+          meetingId: data.meetingId || meetingId,
+          status: data.status || 'UNKNOWN',
+          raw: data
+        }, null, 2);
+      } else {
+        showError(message, formatHttpError(response.status, response.data));
+        result.textContent = formatRaw(response.rawText, response.data);
+      }
+    });
+  </script>
+</body>
+</html>

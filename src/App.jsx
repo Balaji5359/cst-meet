@@ -69,7 +69,7 @@ function App() {
 
   const configErrorMessage = hasCognitoConfig
     ? ''
-    : `Missing .env values: ${cognitoConfigErrors.join(', ')}`
+    : `Missing env values: ${cognitoConfigErrors.join(', ')}`
 
   if (auth.isLoading) {
     return (
@@ -128,3 +128,4 @@ function App() {
 }
 
 export default App
+

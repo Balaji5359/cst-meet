@@ -1,4 +1,18 @@
-const readEnv = (key) => (import.meta.env[key] || '').trim()
+const readEnv = (key) => {
+  const processValue =
+    typeof process !== 'undefined' && process?.env && typeof process.env[key] === 'string'
+      ? process.env[key].trim()
+      : ''
+
+  if (processValue) return processValue
+
+  const viteValue =
+    typeof import.meta !== 'undefined' && import.meta?.env && typeof import.meta.env[key] === 'string'
+      ? import.meta.env[key].trim()
+      : ''
+
+  return viteValue
+}
 
 export const cognitoConfig = {
   authority: readEnv('VITE_COGNITO_AUTHORITY'),
