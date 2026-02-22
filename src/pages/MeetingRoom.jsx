@@ -40,9 +40,11 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const [localStream, setLocalStream] = useState(null)
 
   const wsRef = useRef(null)
+  const wsReadyRef = useRef(false)
   const peerConnectionsRef = useRef({})
   const localStreamRef = useRef(null)
   const pendingIceCandidatesRef = useRef({})
+  const pendingSignalsRef = useRef([])
 
   const roomName = useMemo(() => roomPath.split('/').at(-1) || '', [roomPath])
   const selfName = user?.name || user?.email || 'You'
@@ -76,33 +78,25 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     delete pendingIceCandidatesRef.current[key]
   }
 
-  const sendSignal = (payload) => {
+  const flushPendingSignals = () => {
     const socket = wsRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN) return
+
+    const queued = pendingSignalsRef.current
+    pendingSignalsRef.current = []
+
+    queued.forEach((payload) => {
+      socket.send(JSON.stringify(payload))
+    })
+  }
+
+  const sendSignal = (payload) => {
+    const socket = wsRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      pendingSignalsRef.current.push(payload)
+      return
+    }
     socket.send(JSON.stringify(payload))
-  }
-
-  const flushPendingIceCandidates = async (remoteKey, pc) => {
-    const queued = pendingIceCandidatesRef.current[remoteKey] || []
-    if (!queued.length) return
-
-    pendingIceCandidatesRef.current[remoteKey] = []
-
-    for (const candidate of queued) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        await pc.addIceCandidate(new RTCIceCandidate(candidate))
-      } catch (error) {
-        console.error('[WebRTC] Failed to flush ICE candidate', error)
-      }
-    }
-  }
-
-  const queueIceCandidate = (remoteKey, candidate) => {
-    if (!pendingIceCandidatesRef.current[remoteKey]) {
-      pendingIceCandidatesRef.current[remoteKey] = []
-    }
-    pendingIceCandidatesRef.current[remoteKey].push(candidate)
   }
 
   const createPeerConnection = (remoteEmail) => {
@@ -165,14 +159,50 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     return pc
   }
 
+  const flushPendingIceCandidates = async (remoteKey, pc) => {
+    const queued = pendingIceCandidatesRef.current[remoteKey] || []
+    if (!queued.length) return
+
+    pendingIceCandidatesRef.current[remoteKey] = []
+
+    for (const candidate of queued) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await pc.addIceCandidate(new RTCIceCandidate(candidate))
+      } catch (error) {
+        console.error('[WebRTC] Failed to flush ICE candidate', error)
+      }
+    }
+  }
+
+  const queueIceCandidate = (remoteKey, candidate) => {
+    if (!pendingIceCandidatesRef.current[remoteKey]) {
+      pendingIceCandidatesRef.current[remoteKey] = []
+    }
+    pendingIceCandidatesRef.current[remoteKey].push(candidate)
+  }
+
   const sendOfferTo = async (targetEmail) => {
     const targetKey = safeId(targetEmail)
     if (!targetKey || targetKey === selfEmailKey) return
     if (!shouldInitiateOffer(selfEmail, targetEmail)) return
+    if (!wsReadyRef.current) return
 
     const pc = createPeerConnection(targetEmail)
     if (!pc) return
-    if (pc.signalingState !== 'stable') return
+
+    if (pc.signalingState !== 'stable') {
+      if (pc.signalingState === 'have-local-offer') {
+        try {
+          await pc.setLocalDescription({ type: 'rollback' })
+        } catch (error) {
+          console.error('[WebRTC] Failed to rollback stale offer for', targetEmail, error)
+          return
+        }
+      } else {
+        return
+      }
+    }
 
     try {
       const offer = await pc.createOffer()
@@ -217,7 +247,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         const pc = createPeerConnection(fromEmail)
         if (!pc) return
 
-        const offer = message.payload || message.offer
+        const offer = message.payload || message.data || message.offer
         if (!offer) return
 
         if (pc.signalingState !== 'stable') {
@@ -259,7 +289,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         const pc = peerConnectionsRef.current[remoteKey]
         if (!pc) return
 
-        const answer = message.payload || message.answer
+        const answer = message.payload || message.data || message.answer
         if (!answer) return
 
         console.log('[WebRTC] Received answer from', fromEmail)
@@ -268,7 +298,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       }
 
       if (type === 'ice' || type === 'candidate') {
-        const candidate = message.payload || message.candidate
+        const candidate = message.payload || message.data || message.candidate
         if (!candidate) return
 
         const pc = peerConnectionsRef.current[remoteKey]
@@ -313,20 +343,25 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       console.log('[WebSocket] Connecting:', wsUrl)
       const socket = new WebSocket(wsUrl)
       wsRef.current = socket
+      wsReadyRef.current = false
 
       socket.onopen = () => {
         console.log('[WebSocket] Connected')
+        wsReadyRef.current = true
+        flushPendingSignals()
       }
 
       socket.onmessage = handleSignalMessage
 
       socket.onclose = () => {
+        wsReadyRef.current = false
         if (!unmounted) {
           setStatusError('WebSocket disconnected. Rejoin meeting to reconnect.')
         }
       }
 
       socket.onerror = () => {
+        wsReadyRef.current = false
         setStatusError('WebSocket signaling failed.')
       }
     }
@@ -342,6 +377,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         wsRef.current.close()
       }
       wsRef.current = null
+      wsReadyRef.current = false
 
       Object.values(peerConnectionsRef.current).forEach((pc) => pc.close())
       peerConnectionsRef.current = {}
@@ -351,6 +387,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       }
       localStreamRef.current = null
       pendingIceCandidatesRef.current = {}
+      pendingSignalsRef.current = []
       setLocalStream(null)
       setParticipants([])
     }
@@ -412,7 +449,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
       for (const participant of deduped.values()) {
         const key = safeId(participant.email)
-        if (!peerConnectionsRef.current[key]) {
+        if (!peerConnectionsRef.current[key] && wsReadyRef.current) {
           // eslint-disable-next-line no-await-in-loop
           await sendOfferTo(participant.email)
         }
@@ -515,3 +552,4 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 }
 
 export default MeetingRoom
+
