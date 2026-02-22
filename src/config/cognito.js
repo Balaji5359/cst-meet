@@ -1,10 +1,12 @@
+const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173'
+
 const FRONTEND_COGNITO = {
   authority: 'https://cognito-idp.ap-south-1.amazonaws.com/ap-south-1_7K5mcI62q',
   client_id: '3ripmnd6eslk9auf7lq9b007d1',
-  redirect_uri: 'http://localhost:5173',
+  redirect_uri: appOrigin,
   scope: 'email openid',
   domain: 'https://ap-south-17k5mci62q.auth.ap-south-1.amazoncognito.com',
-  logout_uri: 'http://localhost:5173',
+  logout_uri: appOrigin,
 }
 
 export const cognitoConfig = {
