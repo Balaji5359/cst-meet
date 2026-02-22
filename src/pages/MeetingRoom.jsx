@@ -35,6 +35,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const [meetingStatus, setMeetingStatus] = useState('Checking...')
   const [statusError, setStatusError] = useState('')
   const [isLeaving, setIsLeaving] = useState(false)
+  const [mediaBlocked, setMediaBlocked] = useState(false)
+  const [mediaRetryTick, setMediaRetryTick] = useState(0)
   const [hostUserId, setHostUserId] = useState('')
   const [participants, setParticipants] = useState([])
   const [localStream, setLocalStream] = useState(null)
@@ -445,7 +447,9 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
         localStreamRef.current = stream
         setLocalStream(stream)
+        setMediaBlocked(false)
       } catch {
+        setMediaBlocked(true)
         setStatusError('Camera or microphone permission denied.')
         return
       }
@@ -485,7 +489,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       setLocalStream(null)
       setParticipants([])
     }
-  }, [roomName, selfEmail])
+  }, [roomName, selfEmail, mediaRetryTick])
 
   useEffect(() => {
     let cancelled = false
@@ -619,11 +623,21 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     onNavigate('/dashboard')
   }
 
+
+  const handleEnableMedia = () => {
+    setStatusError('')
+    setMediaRetryTick((value) => value + 1)
+  }
   return (
     <main className="meeting-page">
       <Header title={`Meeting: ${roomName}`} subtitle={`Status: ${meetingStatus}`} />
 
       {statusError ? <p className="api-error">{statusError}</p> : null}
+      {mediaBlocked && !localStream ? (
+        <button className="control-btn active" onClick={handleEnableMedia}>
+          Enable Camera & Mic
+        </button>
+      ) : null}
       {meetingStatus === 'EXPIRED' ? (
         <p className="api-error">Meeting expired. Redirecting to dashboard...</p>
       ) : null}
