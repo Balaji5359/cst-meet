@@ -11,10 +11,10 @@
     <section class="card">
       <h1>Join Meeting</h1>
       <label for="meetingId">Meeting ID</label>
-      <input id="meetingId" type="text" placeholder="meeting-id" />
+      <input id="meetingId" type="text" placeholder="ABC123" />
 
-      <label for="userId">User Email / ID</label>
-      <input id="userId" type="text" placeholder="user@example.com" />
+      <label for="userEmail">User Email</label>
+      <input id="userEmail" type="text" placeholder="user@email.com" />
 
       <button id="joinBtn" class="btn" type="button">Join Meeting</button>
 
@@ -28,22 +28,22 @@
   <script>
     document.getElementById('joinBtn').addEventListener('click', async () => {
       const meetingId = document.getElementById('meetingId').value.trim();
-      const userId = document.getElementById('userId').value.trim();
+      const userEmail = document.getElementById('userEmail').value.trim();
       const message = document.getElementById('message');
       const result = document.getElementById('result');
       message.textContent = '';
       result.textContent = '';
 
-      if (!meetingId || !userId) {
-        showError(message, 'Meeting ID and User Email/ID are required.');
+      if (!meetingId || !userEmail) {
+        showError(message, 'meetingId and userEmail are required.');
         return;
       }
 
-      const response = await apiLambdaPost('/meeting/join', { meetingId, userId });
+      const response = await apiPost('/meeting/join', { meetingId, userEmail });
 
       if (response.ok) {
         showSuccess(message, 'Joined meeting successfully.');
-        result.textContent = JSON.stringify(response.data || { ok: true }, null, 2);
+        result.textContent = JSON.stringify(response.data || {}, null, 2);
       } else {
         showError(message, formatHttpError(response.status, response.data));
         result.textContent = formatRaw(response.rawText, response.data);

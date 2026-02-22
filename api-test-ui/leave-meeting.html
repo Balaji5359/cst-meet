@@ -9,10 +9,14 @@
 <body>
   <main class="page">
     <section class="card">
-      <h1>Leave / Check Expiry</h1>
+      <h1>Leave Meeting</h1>
       <label for="meetingId">Meeting ID</label>
-      <input id="meetingId" type="text" placeholder="meeting-id" />
-      <button id="leaveBtn" class="btn" type="button">Leave / Check Expiry</button>
+      <input id="meetingId" type="text" placeholder="ABC123" />
+
+      <label for="userEmail">User Email</label>
+      <input id="userEmail" type="text" placeholder="user@email.com" />
+
+      <button id="leaveBtn" class="btn" type="button">Leave Meeting</button>
 
       <div id="message" class="message"></div>
       <pre id="result" class="result"></pre>
@@ -24,23 +28,22 @@
   <script>
     document.getElementById('leaveBtn').addEventListener('click', async () => {
       const meetingId = document.getElementById('meetingId').value.trim();
+      const userEmail = document.getElementById('userEmail').value.trim();
       const message = document.getElementById('message');
       const result = document.getElementById('result');
       message.textContent = '';
       result.textContent = '';
 
-      if (!meetingId) {
-        showError(message, 'meetingId is required.');
+      if (!meetingId || !userEmail) {
+        showError(message, 'meetingId and userEmail are required.');
         return;
       }
 
-      const response = await apiRequest(`/meeting/leave?meetingId=${encodeURIComponent(meetingId)}`, {
-        method: 'GET'
-      });
+      const response = await apiPost('/meeting/leave', { meetingId, userEmail });
 
       if (response.ok) {
-        showSuccess(message, 'Leave/expiry API responded successfully.');
-        result.textContent = JSON.stringify(response.data || { meetingId }, null, 2);
+        showSuccess(message, 'Left meeting successfully.');
+        result.textContent = JSON.stringify(response.data || {}, null, 2);
       } else {
         showError(message, formatHttpError(response.status, response.data));
         result.textContent = formatRaw(response.rawText, response.data);

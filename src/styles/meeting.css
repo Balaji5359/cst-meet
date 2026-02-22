@@ -186,3 +186,29 @@
     font-size: 0.85rem;
   }
 }
+.role-pill {
+  position: absolute;
+  right: 0.6rem;
+  top: 0.6rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  border-radius: 0.5rem;
+  padding: 0.18rem 0.42rem;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+.role-pill.admin {
+  background: #2a66ff;
+}
+.main-video-element,
+.participant-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.participant-video {
+  position: absolute;
+  inset: 0;
+}

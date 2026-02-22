@@ -1,4 +1,4 @@
-function ControlBar({ controls, onToggle, onLeave }) {
+function ControlBar({ controls, onToggle, onLeave, leaveLabel = 'Leave' }) {
   const items = [
     { key: 'camera', label: 'Camera' },
     { key: 'mute', label: 'Mute' },
@@ -20,7 +20,7 @@ function ControlBar({ controls, onToggle, onLeave }) {
         </button>
       ))}
       <button type="button" className="control-btn leave-btn" onClick={onLeave}>
-        <span>Leave</span>
+        <span>{leaveLabel}</span>
       </button>
     </footer>
   )

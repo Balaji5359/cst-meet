@@ -10,8 +10,8 @@
   <main class="page">
     <section class="card">
       <h1>Create Meeting</h1>
-      <label for="userId">User ID / Email</label>
-      <input id="userId" type="text" placeholder="user@example.com" />
+      <label for="userId">User ID</label>
+      <input id="userId" type="text" placeholder="user-email-or-id" />
       <button id="createBtn" class="btn" type="button">Create Meeting</button>
 
       <div id="message" class="message"></div>
@@ -30,20 +30,15 @@
       result.textContent = '';
 
       if (!userId) {
-        showError(message, 'User ID / Email is required.');
+        showError(message, 'userId is required.');
         return;
       }
 
-      const response = await apiLambdaPost('/meeting/create', { userId });
+      const response = await apiPost('/meeting/create', { userId });
 
       if (response.ok) {
-        const data = response.data || {};
         showSuccess(message, 'Meeting created successfully.');
-        result.textContent = JSON.stringify({
-          meetingId: data.meetingId || null,
-          expiresAt: data.expiresAt || null,
-          raw: data
-        }, null, 2);
+        result.textContent = JSON.stringify(response.data || {}, null, 2);
       } else {
         showError(message, formatHttpError(response.status, response.data));
         result.textContent = formatRaw(response.rawText, response.data);

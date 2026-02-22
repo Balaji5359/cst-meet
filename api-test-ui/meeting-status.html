@@ -9,9 +9,9 @@
 <body>
   <main class="page">
     <section class="card">
-      <h1>Get Meeting Status</h1>
+      <h1>Meeting Status</h1>
       <label for="meetingId">Meeting ID</label>
-      <input id="meetingId" type="text" placeholder="meeting-id" />
+      <input id="meetingId" type="text" placeholder="ABC123" />
       <button id="statusBtn" class="btn" type="button">Check Status</button>
 
       <div id="message" class="message"></div>
@@ -34,18 +34,11 @@
         return;
       }
 
-      const response = await apiRequest(`/meeting/getid?meetingId=${encodeURIComponent(meetingId)}`, {
-        method: 'GET'
-      });
+      const response = await apiPost('/meeting/getid', { meetingId });
 
       if (response.ok) {
-        const data = response.data || {};
         showSuccess(message, 'Status fetched successfully.');
-        result.textContent = JSON.stringify({
-          meetingId: data.meetingId || meetingId,
-          status: data.status || 'UNKNOWN',
-          raw: data
-        }, null, 2);
+        result.textContent = JSON.stringify(response.data || {}, null, 2);
       } else {
         showError(message, formatHttpError(response.status, response.data));
         result.textContent = formatRaw(response.rawText, response.data);

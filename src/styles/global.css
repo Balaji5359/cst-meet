@@ -274,3 +274,93 @@ textarea {
   cursor: not-allowed;
   transform: none;
 }
+.api-error {
+  margin-top: 0.85rem;
+  color: #b42318;
+  font-size: 0.92rem;
+  background: #fff3f2;
+  border: 1px solid #fecdc9;
+  border-radius: 0.7rem;
+  padding: 0.55rem 0.7rem;
+}
+
+:root[data-theme='dark'] .api-error {
+  background: #3b1f25;
+  border-color: #63333f;
+  color: #ffd1cc;
+}
+
+.dashboard-actions button:disabled,
+.signout-btn:disabled,
+.google-btn:disabled,
+.control-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 15, 33, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  z-index: 60;
+}
+
+.modal-card {
+  width: min(92%, 560px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: var(--panel-shadow);
+  padding: 1.2rem;
+}
+
+.modal-card h3 {
+  margin: 0;
+}
+
+.modal-card p {
+  color: var(--text-muted);
+}
+
+.copy-box {
+  margin-top: 0.5rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.65rem;
+  overflow-wrap: anywhere;
+}
+
+.modal-actions {
+  margin-top: 0.8rem;
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.modal-actions button {
+  border: 0;
+  background: var(--brand);
+  color: #fff;
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+.modal-actions button.secondary {
+  background: var(--surface-soft);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.copy-status {
+  margin-top: 0.55rem;
+  color: var(--brand);
+}
+
+.hint-text {
+  margin-top: 0.3rem;
+  font-size: 0.9rem;
+}

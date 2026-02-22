@@ -1,20 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useAuth } from 'react-oidc-context'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import MeetingRoom from './pages/MeetingRoom'
-import {
-  cognitoConfig,
-  cognitoConfigErrors,
-  cognitoDomain,
-  hasCognitoConfig,
-  logoutUri,
-} from './config/cognito'
+import { cognitoConfig, cognitoDomain, hasCognitoConfig, logoutUri } from './config/cognito'
+import { useMeetAuth } from './context/MeetAuthContext'
 
 const protectedPaths = ['/dashboard', '/meeting/']
 
 function App() {
-  const auth = useAuth()
+  const { oidc, user, isAuthenticated, isLoading, error } = useMeetAuth()
   const [path, setPath] = useState(window.location.pathname)
 
   useEffect(() => {
@@ -35,28 +29,18 @@ function App() {
   )
 
   useEffect(() => {
-    if (auth.isAuthenticated && path === '/') {
+    if (isAuthenticated && path === '/') {
       navigate('/dashboard')
     }
-  }, [auth.isAuthenticated, path])
+  }, [isAuthenticated, path])
 
-  const signInWithGoogle = () => {
+  const signInWithCognito = () => {
     if (!hasCognitoConfig) return
-    auth.signinRedirect({ extraQueryParams: { identity_provider: 'Google' } })
-  }
-
-  const signInWithEmail = () => {
-    if (!hasCognitoConfig) return
-    auth.signinRedirect()
-  }
-
-  const signUp = () => {
-    if (!hasCognitoConfig) return
-    auth.signinRedirect({ extraQueryParams: { screen_hint: 'signup' } })
+    oidc.signinRedirect()
   }
 
   const signOut = async () => {
-    await auth.removeUser()
+    await oidc.removeUser()
 
     if (!cognitoDomain || !cognitoConfig.client_id || !logoutUri) {
       navigate('/')
@@ -67,11 +51,7 @@ function App() {
     window.location.href = logoutUrl
   }
 
-  const configErrorMessage = hasCognitoConfig
-    ? ''
-    : `Missing Cognito config fields: ${cognitoConfigErrors.join(', ')}`
-
-  if (auth.isLoading) {
+  if (isLoading) {
     return (
       <main className="auth-page">
         <section className="auth-card">
@@ -81,52 +61,33 @@ function App() {
     )
   }
 
-  if (auth.error) {
+  if (error) {
     return (
       <main className="auth-page">
         <section className="auth-card">
           <h1>Authentication Error</h1>
-          <p>{auth.error.message}</p>
-          {configErrorMessage ? <p>{configErrorMessage}</p> : null}
-          <button type="button" className="google-btn" onClick={signInWithEmail}>
-            Try Again
+          <p>{error.message}</p>
+          <button type="button" className="google-btn" onClick={signInWithCognito}>
+            Login with Cognito
           </button>
         </section>
       </main>
     )
   }
 
-  if (!auth.isAuthenticated && isProtectedRoute) {
-    return (
-      <Login
-        onSignInWithGoogle={signInWithGoogle}
-        onSignInWithEmail={signInWithEmail}
-        onSignUp={signUp}
-        disabled={!hasCognitoConfig}
-        errorMessage={configErrorMessage}
-      />
-    )
+  if (!isAuthenticated && isProtectedRoute) {
+    return <Login onLogin={signInWithCognito} disabled={!hasCognitoConfig} />
   }
 
   if (path.startsWith('/meeting/')) {
-    return <MeetingRoom onNavigate={navigate} roomPath={path} />
+    return <MeetingRoom onNavigate={navigate} roomPath={path} user={user} />
   }
 
   if (path === '/dashboard') {
-    return <Dashboard onNavigate={navigate} user={auth.user?.profile} onSignOut={signOut} />
+    return <Dashboard onNavigate={navigate} user={user} onSignOut={signOut} />
   }
 
-  return (
-    <Login
-      onSignInWithGoogle={signInWithGoogle}
-      onSignInWithEmail={signInWithEmail}
-      onSignUp={signUp}
-      disabled={!hasCognitoConfig}
-      errorMessage={configErrorMessage}
-    />
-  )
+  return <Login onLogin={signInWithCognito} disabled={!hasCognitoConfig} />
 }
 
 export default App
-
-

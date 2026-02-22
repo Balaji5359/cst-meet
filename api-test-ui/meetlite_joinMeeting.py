@@ -1,36 +1,90 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import boto3
 
 
 dynamodb = boto3.resource("dynamodb")
-meetings = dynamodb.Table("Meetings")
-participants = dynamodb.Table("Participants")
+meetings_table = dynamodb.Table("Meetings")
+participants_table = dynamodb.Table("Participants")
+
+
+def _json_response(status_code, payload):
+    return {
+        "statusCode": status_code,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(payload),
+    }
+
+
+def _parse_body(event):
+    raw_body = event.get("body")
+
+    if raw_body is None:
+        return None, "Request body is required"
+
+    if isinstance(raw_body, str):
+        raw_body = raw_body.strip()
+        if not raw_body:
+            return None, "Request body is required"
+        try:
+            parsed = json.loads(raw_body)
+        except json.JSONDecodeError:
+            return None, "Request body must be valid JSON"
+    elif isinstance(raw_body, dict):
+        parsed = raw_body
+    else:
+        return None, "Request body must be valid JSON"
+
+    if isinstance(parsed, dict) and "body" in parsed and isinstance(parsed["body"], str):
+        try:
+            parsed = json.loads(parsed["body"])
+        except json.JSONDecodeError:
+            return None, "Wrapped body must be valid JSON"
+
+    if not isinstance(parsed, dict):
+        return None, "Request body must be a JSON object"
+
+    return parsed, None
 
 
 def lambda_handler(event, context):
-    body = json.loads(event["body"])
-    meeting_id = body["meetingId"]
-    user_id = body["userId"]
+    body, error = _parse_body(event or {})
+    if error:
+        return _json_response(400, {"error": error})
 
-    meeting = meetings.get_item(Key={"meetingId": meeting_id})
+    meeting_id = (body.get("meetingId") or "").strip()
+    user_email = (body.get("userEmail") or "").strip()
 
-    if "Item" not in meeting:
-        return {"statusCode": 404, "body": "Meeting not found"}
+    if not meeting_id or not user_email:
+        return _json_response(400, {"error": "meetingId and userEmail are required"})
 
-    if meeting["Item"]["status"] != "ACTIVE":
-        return {"statusCode": 400, "body": "Meeting not active"}
+    meeting = meetings_table.get_item(Key={"meetingId": meeting_id}).get("Item")
+    if not meeting:
+        return _json_response(404, {"error": "Meeting not found"})
 
-    participants.put_item(
+    if meeting.get("status") != "ACTIVE":
+        return _json_response(400, {"error": "Meeting not active"})
+
+    now_utc = datetime.now(timezone.utc).isoformat()
+
+    # Upsert participant as ACTIVE so re-join works naturally.
+    participants_table.put_item(
         Item={
             "meetingId": meeting_id,
-            "userEmail": user_id,
-            "joinedAt": datetime.utcnow().isoformat(),
+            "userEmail": user_email,
+            "joinedAt": now_utc,
             "role": "PARTICIPANT",
+            "participantStatus": "ACTIVE",
+            "leftAt": None,
         }
     )
 
-    return {
-        "statusCode": 200,
-        "body": json.dumps({"message": "Joined meeting"}),
-    }
+    return _json_response(
+        200,
+        {
+            "message": "Joined meeting",
+            "meetingId": meeting_id,
+            "userEmail": user_email,
+            "participantStatus": "ACTIVE",
+        },
+    )
