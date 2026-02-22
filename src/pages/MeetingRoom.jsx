@@ -46,6 +46,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const pendingIceCandidatesRef = useRef({})
   const pendingSignalsRef = useRef([])
   const reconnectTimersRef = useRef({})
+  const wsReconnectTimerRef = useRef(null)
+  const isLeavingRef = useRef(false)
 
   const roomName = useMemo(() => roomPath.split('/').at(-1) || '', [roomPath])
   const selfName = user?.name || user?.email || 'You'
@@ -78,6 +80,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     setParticipants((prev) => prev.filter((item) => safeId(item.email || item.id) !== key))
     delete pendingIceCandidatesRef.current[key]
   }
+
   const clearReconnectTimer = (participantKey) => {
     const key = safeId(participantKey)
     if (!key) return
@@ -99,6 +102,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         existing.onicecandidate = null
         existing.ontrack = null
         existing.onconnectionstatechange = null
+        existing.oniceconnectionstatechange = null
         existing.close()
       } catch {
         // ignore close errors
@@ -129,85 +133,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       return
     }
     socket.send(JSON.stringify(payload))
-  }
-
-  const createPeerConnection = (remoteEmail) => {
-    const remoteKey = safeId(remoteEmail)
-    if (!remoteKey || remoteKey === selfEmailKey) return null
-
-    if (peerConnectionsRef.current[remoteKey]) {
-      return peerConnectionsRef.current[remoteKey]
-    }
-
-    clearReconnectTimer(remoteKey)
-
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
-
-    const stream = localStreamRef.current
-    if (stream) {
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream))
-    }
-
-    pc.onicecandidate = (event) => {
-      if (!event.candidate) return
-
-      console.log('[WebRTC] Sending ICE candidate to', remoteEmail)
-
-      sendSignal({
-        action: 'signal',
-        type: 'ice',
-        meetingId: roomName,
-        from: selfEmail,
-        to: remoteEmail,
-        payload: event.candidate,
-      })
-    }
-
-    pc.ontrack = (event) => {
-      const [remoteStream] = event.streams
-      if (!remoteStream) return
-
-      console.log('[WebRTC] Remote track received from', remoteEmail)
-
-      addOrUpdateParticipant({
-        id: remoteEmail,
-        label: remoteEmail,
-        email: remoteEmail,
-        stream: remoteStream,
-        cameraOn: true,
-        role: 'PARTICIPANT',
-        isHost:
-          !!hostUserId &&
-          (safeId(hostUserId) === remoteKey || safeId(hostUserId) === safeId(remoteEmail)),
-      })
-    }
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') {
-        clearReconnectTimer(remoteEmail)
-        return
-      }
-
-      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
-        console.log('[WebRTC] Connection state', pc.connectionState, 'for', remoteEmail)
-
-        clearPeerConnection(remoteEmail)
-        removeParticipant(remoteEmail)
-
-        if (pc.connectionState !== 'closed') {
-          const retryKey = safeId(remoteEmail)
-          reconnectTimersRef.current[retryKey] = window.setTimeout(() => {
-            delete reconnectTimersRef.current[retryKey]
-            if (wsReadyRef.current) {
-              sendOfferTo(remoteEmail)
-            }
-          }, 1200)
-        }
-      }
-    }
-
-    peerConnectionsRef.current[remoteKey] = pc
-    return pc
   }
 
   const flushPendingIceCandidates = async (remoteKey, pc) => {
@@ -274,6 +199,104 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
   }
 
+  const createPeerConnection = (remoteEmail) => {
+    const remoteKey = safeId(remoteEmail)
+    if (!remoteKey || remoteKey === selfEmailKey) return null
+
+    if (peerConnectionsRef.current[remoteKey]) {
+      return peerConnectionsRef.current[remoteKey]
+    }
+
+    clearReconnectTimer(remoteKey)
+
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
+
+    const stream = localStreamRef.current
+    if (stream) {
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream))
+    }
+
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) return
+
+      console.log('[WebRTC] Sending ICE candidate to', remoteEmail)
+
+      sendSignal({
+        action: 'signal',
+        type: 'ice',
+        meetingId: roomName,
+        from: selfEmail,
+        to: remoteEmail,
+        payload: event.candidate,
+      })
+    }
+
+    pc.ontrack = (event) => {
+      const [remoteStream] = event.streams
+      if (!remoteStream) return
+
+      console.log('[WebRTC] Remote track received from', remoteEmail)
+
+      addOrUpdateParticipant({
+        id: remoteEmail,
+        label: remoteEmail,
+        email: remoteEmail,
+        stream: remoteStream,
+        cameraOn: true,
+        role: 'PARTICIPANT',
+        isHost:
+          !!hostUserId &&
+          (safeId(hostUserId) === remoteKey || safeId(hostUserId) === safeId(remoteEmail)),
+      })
+    }
+
+    const schedulePeerReconnect = (delayMs = 1200) => {
+      const retryKey = safeId(remoteEmail)
+      clearReconnectTimer(retryKey)
+      reconnectTimersRef.current[retryKey] = window.setTimeout(() => {
+        delete reconnectTimersRef.current[retryKey]
+        clearPeerConnection(remoteEmail)
+        removeParticipant(remoteEmail)
+        if (wsReadyRef.current) {
+          sendOfferTo(remoteEmail)
+        }
+      }, delayMs)
+    }
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        clearReconnectTimer(remoteEmail)
+        return
+      }
+
+      if (pc.connectionState === 'disconnected') {
+        schedulePeerReconnect(3500)
+        return
+      }
+
+      if (pc.connectionState === 'failed') {
+        console.log('[WebRTC] Connection state failed for', remoteEmail)
+        schedulePeerReconnect(800)
+        return
+      }
+
+      if (pc.connectionState === 'closed') {
+        clearPeerConnection(remoteEmail)
+        removeParticipant(remoteEmail)
+      }
+    }
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        console.log('[WebRTC] ICE state failed for', remoteEmail)
+        schedulePeerReconnect(600)
+      }
+    }
+
+    peerConnectionsRef.current[remoteKey] = pc
+    return pc
+  }
+
   const handleSignalMessage = async (event) => {
     let message
     try {
@@ -283,7 +306,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
 
     const type = (message?.type || '').toLowerCase()
-    if (!['offer', 'answer', 'ice', 'candidate'].includes(type)) return
+    if (!['offer', 'answer', 'ice'].includes(type)) return
 
     const fromEmail = (message.from || message.fromEmail || '').trim()
     const toEmail = (message.to || message.toEmail || '').trim()
@@ -348,7 +371,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         await flushPendingIceCandidates(remoteKey, pc)
       }
 
-      if (type === 'ice' || type === 'candidate') {
+      if (type === 'ice') {
         const candidate = message.payload || message.data || message.candidate
         if (!candidate) return
 
@@ -370,6 +393,48 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   useEffect(() => {
     let unmounted = false
 
+    const connectWebSocket = () => {
+      const wsUrl = normalizeWsUrl(SIGNALING_WS_URL, roomName, selfEmail)
+      if (!wsUrl) {
+        setStatusError('Signaling WebSocket URL is not configured.')
+        return
+      }
+
+      console.log('[WebSocket] Connecting:', wsUrl)
+      const socket = new WebSocket(wsUrl)
+      wsRef.current = socket
+      wsReadyRef.current = false
+
+      socket.onopen = () => {
+        console.log('[WebSocket] Connected')
+        wsReadyRef.current = true
+        setStatusError('')
+        flushPendingSignals()
+      }
+
+      socket.onmessage = handleSignalMessage
+
+      socket.onclose = () => {
+        wsReadyRef.current = false
+        if (!unmounted && !isLeavingRef.current) {
+          setStatusError('Realtime disconnected. Reconnecting...')
+          if (!wsReconnectTimerRef.current) {
+            wsReconnectTimerRef.current = window.setTimeout(() => {
+              wsReconnectTimerRef.current = null
+              connectWebSocket()
+            }, 1500)
+          }
+        }
+      }
+
+      socket.onerror = () => {
+        wsReadyRef.current = false
+        if (!unmounted && !isLeavingRef.current) {
+          setStatusError('WebSocket signaling failed. Reconnecting...')
+        }
+      }
+    }
+
     const startMediaAndSignaling = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
@@ -385,36 +450,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         return
       }
 
-      const wsUrl = normalizeWsUrl(SIGNALING_WS_URL, roomName, selfEmail)
-      if (!wsUrl) {
-        setStatusError('Signaling WebSocket URL is not configured.')
-        return
-      }
-
-      console.log('[WebSocket] Connecting:', wsUrl)
-      const socket = new WebSocket(wsUrl)
-      wsRef.current = socket
-      wsReadyRef.current = false
-
-      socket.onopen = () => {
-        console.log('[WebSocket] Connected')
-        wsReadyRef.current = true
-        flushPendingSignals()
-      }
-
-      socket.onmessage = handleSignalMessage
-
-      socket.onclose = () => {
-        wsReadyRef.current = false
-        if (!unmounted) {
-          setStatusError('WebSocket disconnected. Rejoin meeting to reconnect.')
-        }
-      }
-
-      socket.onerror = () => {
-        wsReadyRef.current = false
-        setStatusError('WebSocket signaling failed.')
-      }
+      connectWebSocket()
     }
 
     if (roomName && selfEmail) {
@@ -423,6 +459,11 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     return () => {
       unmounted = true
+
+      if (wsReconnectTimerRef.current) {
+        window.clearTimeout(wsReconnectTimerRef.current)
+        wsReconnectTimerRef.current = null
+      }
 
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.close()
@@ -551,9 +592,10 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     if (!confirmed) return
 
     setIsLeaving(true)
+    isLeavingRef.current = true
 
     Object.keys(peerConnectionsRef.current).forEach((key) => clearPeerConnection(key))
-      peerConnectionsRef.current = {}
+    peerConnectionsRef.current = {}
 
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop())
@@ -569,6 +611,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     setIsLeaving(false)
 
     if (!response.ok) {
+      isLeavingRef.current = false
       setStatusError(extractErrorMessage(response))
       return
     }
@@ -605,4 +648,3 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 }
 
 export default MeetingRoom
-
