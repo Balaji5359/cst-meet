@@ -134,3 +134,168 @@ Application Load Balancer (HTTPS)
 Custom Domain (Route 53)
 ↓
 User Browser
+
+
+# CST Meet – Day 3 Media Scaling & Production Readiness
+
+## Project Overview
+Day 3 focused on extending **CST Meet** into a **real-time video meeting platform** by integrating authentication, backend APIs, WebSocket-based signaling, and WebRTC media streaming using AWS serverless architecture.
+
+---
+
+## Tech Stack (Day 3)
+- **Frontend**: Vite + React + WebRTC
+- **Authentication**: Amazon Cognito (Google + Email)
+- **Backend**: AWS Lambda (Python)
+- **Database**: Amazon DynamoDB
+- **APIs**:
+  - REST API Gateway (meeting lifecycle)
+  - WebSocket API Gateway (real-time signaling)
+- **Deployment**: AWS ECS (Fargate)
+- **Security**: IAM, HTTPS (ALB + ACM)
+
+---
+
+## Authentication & User Management
+- Implemented **Amazon Cognito User Pool**
+- Enabled:
+  - Google OAuth
+  - Email & Password login
+- Used Cognito Hosted UI
+- OAuth 2.0 Authorization Code Flow
+- Extracted user identity from ID token
+- Stored authenticated user details in DynamoDB
+
+---
+
+## Backend Architecture
+- Fully **serverless backend**
+- Business logic handled via AWS Lambda
+- Data persistence using DynamoDB
+- API Gateway used for:
+  - REST APIs
+  - WebSocket signaling
+
+---
+
+## DynamoDB Tables
+- **MeetLiteUsers**
+  - userId
+  - email
+  - name
+  - signup_method
+  - created_at
+
+- **Meetings**
+  - meetingId
+  - hostUserId
+  - createdAt
+  - expiresAt
+  - status (ACTIVE / EXPIRED)
+
+- **Participants**
+  - meetingId
+  - userEmail
+  - role (ADMIN / PARTICIPANT)
+  - joinedAt
+
+- **WebSocketConnections**
+  - connectionId
+  - meetingId
+  - userEmail
+  - connectedAt
+
+---
+
+## REST APIs Implemented
+- **Create Meeting**
+  - Generates meeting ID
+  - Assigns host as ADMIN
+  - Stores meeting metadata
+
+- **Join Meeting**
+  - Validates meeting status
+  - Adds participant
+  - Prevents duplicate joins
+
+- **Leave Meeting**
+  - Handles participant exit
+  - Updates meeting status if expired
+
+- **Get Meeting Status**
+  - Returns meeting status
+  - Returns host details
+  - Returns normalized participant list
+
+---
+
+## Real-Time Signaling (WebSocket)
+- Created **API Gateway WebSocket API**
+- Route selection expression:
+  - `$request.body.action`
+
+### WebSocket Routes
+- `$connect`
+- `$disconnect`
+- `$default`
+
+### WebSocket Lambda Functions
+- **meetlite-ws-connect**
+  - Registers WebSocket connection
+  - Maps user to meeting
+
+- **meetlite-ws-message**
+  - Relays WebRTC signaling messages
+  - Handles offer, answer, ICE candidates
+
+- **meetlite-ws-disconnect**
+  - Cleans up disconnected users
+
+---
+
+## WebRTC Media Integration
+- Enabled camera & microphone using `getUserMedia`
+- Implemented peer-to-peer media streaming
+- Used `RTCPeerConnection`
+- Integrated:
+  - Offer / Answer exchange
+  - ICE candidate handling
+- Media flows directly between browsers (P2P)
+
+---
+
+## UI Enhancements
+- Dashboard → Create / Join meeting
+- Meeting Room UI
+- Video grid layout
+- ADMIN badge for host
+- Participant role handling
+- Leave meeting confirmation
+- Mute / Camera toggle controls
+- Duplicate participant prevention
+
+---
+
+## Deployment & Testing
+- Frontend deployed via **ECS Fargate**
+- Backend deployed via **AWS Lambda**
+- Tested with:
+  - Multiple Google accounts
+  - Multiple browsers
+  - Multiple devices
+- Verified:
+  - Authentication flow
+  - Meeting lifecycle
+  - WebSocket connections
+  - Local video rendering
+
+---
+
+## Current Status
+- Authentication:  Completed
+- Backend APIs:  Stable
+- WebSocket signaling:  Integrated
+- WebRTC media:  In progress (ICE/TURN optimization)
+- Production readiness:  Ongoing
+
+---
