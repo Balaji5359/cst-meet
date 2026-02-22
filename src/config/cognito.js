@@ -1,46 +1,24 @@
-const readRuntimeEnv = (key) => {
-  if (typeof window === 'undefined') return ''
-  const runtimeConfig = window.RUNTIME_CONFIG || {}
-  const value = runtimeConfig[key]
-  return typeof value === 'string' ? value.trim() : ''
+const FRONTEND_COGNITO = {
+  authority: 'https://cognito-idp.ap-south-1.amazonaws.com/ap-south-1_7K5mcI62q',
+  client_id: '3ripmnd6eslk9auf7lq9b007d1',
+  redirect_uri: 'http://localhost:5173',
+  scope: 'email openid',
+  domain: 'https://ap-south-17k5mci62q.auth.ap-south-1.amazoncognito.com',
+  logout_uri: 'http://localhost:5173',
 }
-
-const readProcessEnv = (key) => {
-  const processValue =
-    typeof process !== 'undefined' && process?.env && typeof process.env[key] === 'string'
-      ? process.env[key].trim()
-      : ''
-
-  if (processValue) return processValue
-
-  const viteValue =
-    typeof import.meta !== 'undefined' && import.meta?.env && typeof import.meta.env[key] === 'string'
-      ? import.meta.env[key].trim()
-      : ''
-
-  return viteValue
-}
-
-const readEnv = (key) => readRuntimeEnv(key) || readProcessEnv(key)
 
 export const cognitoConfig = {
-  authority: readEnv('VITE_COGNITO_AUTHORITY'),
-  client_id: readEnv('VITE_COGNITO_CLIENT_ID'),
-  redirect_uri: readEnv('VITE_COGNITO_REDIRECT_URI'),
+  authority: FRONTEND_COGNITO.authority,
+  client_id: FRONTEND_COGNITO.client_id,
+  redirect_uri: FRONTEND_COGNITO.redirect_uri,
   response_type: 'code',
-  scope: readEnv('VITE_COGNITO_SCOPE') || 'openid email profile',
+  scope: FRONTEND_COGNITO.scope,
 }
 
-export const cognitoDomain = readEnv('VITE_COGNITO_DOMAIN')
-export const logoutUri = readEnv('VITE_COGNITO_LOGOUT_URI')
+export const cognitoDomain = FRONTEND_COGNITO.domain
+export const logoutUri = FRONTEND_COGNITO.logout_uri
 
-const requiredEnvKeys = [
-  'VITE_COGNITO_AUTHORITY',
-  'VITE_COGNITO_CLIENT_ID',
-  'VITE_COGNITO_REDIRECT_URI',
-  'VITE_COGNITO_DOMAIN',
-  'VITE_COGNITO_LOGOUT_URI',
-]
+const requiredConfigKeys = ['authority', 'client_id', 'redirect_uri', 'domain', 'logout_uri']
 
-export const cognitoConfigErrors = requiredEnvKeys.filter((key) => !readEnv(key))
+export const cognitoConfigErrors = requiredConfigKeys.filter((key) => !FRONTEND_COGNITO[key])
 export const hasCognitoConfig = cognitoConfigErrors.length === 0
