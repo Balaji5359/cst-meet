@@ -14,6 +14,17 @@ const initialControls = {
   theme: false,
 }
 
+function safeId(value = '') {
+  return String(value).trim().toLowerCase()
+}
+
+function normalizeWsUrl(baseUrl, meetingId, email) {
+  if (!baseUrl) return ''
+  const trimmed = baseUrl.trim()
+  const separator = trimmed.includes('?') ? '&' : '?'
+  return `${trimmed}${separator}meetingId=${encodeURIComponent(meetingId)}&email=${encodeURIComponent(email)}`
+}
+
 function MeetingRoom({ onNavigate, roomPath, user }) {
   const [controls, setControls] = useState(initialControls)
   const [theme, setTheme] = useState('light')
@@ -31,8 +42,12 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const roomName = useMemo(() => roomPath.split('/').at(-1) || '', [roomPath])
   const selfName = user?.name || user?.email || 'You'
   const selfEmail = user?.email || ''
+  const selfEmailKey = safeId(selfEmail)
   const selfUserId = user?.userId || ''
-  const selfIsHost = !!hostUserId && !!selfEmail && hostUserId.toLowerCase() === selfEmail.toLowerCase()
+  const selfIsHost =
+    !!hostUserId &&
+    !!selfEmail &&
+    (safeId(hostUserId) === selfEmailKey || safeId(hostUserId) === safeId(selfUserId))
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -40,14 +55,19 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   }, [theme])
 
   const addOrUpdateParticipant = (nextParticipant) => {
+    const key = safeId(nextParticipant.email || nextParticipant.id)
+    if (!key || key === selfEmailKey) return
+
     setParticipants((prev) => {
-      const filtered = prev.filter((item) => item.id !== nextParticipant.id)
+      const filtered = prev.filter((item) => safeId(item.email || item.id) !== key)
       return [...filtered, nextParticipant]
     })
   }
 
-  const removeParticipant = (participantId) => {
-    setParticipants((prev) => prev.filter((item) => item.id !== participantId))
+  const removeParticipant = (participantKey) => {
+    const key = safeId(participantKey)
+    if (!key) return
+    setParticipants((prev) => prev.filter((item) => safeId(item.email || item.id) !== key))
   }
 
   const sendSignal = (payload) => {
@@ -56,9 +76,12 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     socket.send(JSON.stringify(payload))
   }
 
-  const createPeerConnection = (remoteUserId, remoteEmail = '') => {
-    if (peerConnectionsRef.current[remoteUserId]) {
-      return peerConnectionsRef.current[remoteUserId]
+  const createPeerConnection = (remoteEmail) => {
+    const remoteKey = safeId(remoteEmail)
+    if (!remoteKey || remoteKey === selfEmailKey) return null
+
+    if (peerConnectionsRef.current[remoteKey]) {
+      return peerConnectionsRef.current[remoteKey]
     }
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
@@ -70,12 +93,14 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     pc.onicecandidate = (event) => {
       if (!event.candidate) return
+
       sendSignal({
-        action: 'sendIceCandidate',
+        action: 'signal',
+        type: 'ice',
         meetingId: roomName,
-        toUserId: remoteUserId,
-        fromUserId: selfUserId,
-        candidate: event.candidate,
+        from: selfEmail,
+        to: remoteEmail,
+        payload: event.candidate,
       })
     }
 
@@ -84,146 +109,120 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       if (!remoteStream) return
 
       addOrUpdateParticipant({
-        id: remoteUserId,
-        label: remoteEmail || remoteUserId,
+        id: remoteEmail,
+        label: remoteEmail,
         email: remoteEmail,
         stream: remoteStream,
         cameraOn: true,
         role: 'PARTICIPANT',
-        isHost: false,
+        isHost:
+          !!hostUserId &&
+          (safeId(hostUserId) === remoteKey || safeId(hostUserId) === safeId(remoteEmail)),
       })
     }
 
     pc.onconnectionstatechange = () => {
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
-        removeParticipant(remoteUserId)
+        removeParticipant(remoteEmail)
       }
     }
 
-    peerConnectionsRef.current[remoteUserId] = pc
+    peerConnectionsRef.current[remoteKey] = pc
     return pc
   }
 
-  const handleOffer = async (message) => {
-    const fromUserId = message.fromUserId
-    if (!fromUserId) return
+  const sendOfferTo = async (targetEmail) => {
+    const targetKey = safeId(targetEmail)
+    if (!targetKey || targetKey === selfEmailKey) return
 
-    const fromEmail = message.fromEmail || ''
-    const pc = createPeerConnection(fromUserId, fromEmail)
-
-    await pc.setRemoteDescription(new RTCSessionDescription(message.offer))
-    const answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-
-    addOrUpdateParticipant({
-      id: fromUserId,
-      label: fromEmail || fromUserId,
-      email: fromEmail,
-      stream: null,
-      cameraOn: true,
-      role: 'PARTICIPANT',
-      isHost: false,
-    })
-
-    sendSignal({
-      action: 'sendAnswer',
-      meetingId: roomName,
-      toUserId: fromUserId,
-      fromUserId: selfUserId,
-      answer,
-    })
-  }
-
-  const handleAnswer = async (message) => {
-    const fromUserId = message.fromUserId
-    if (!fromUserId) return
-
-    const pc = peerConnectionsRef.current[fromUserId]
+    const pc = createPeerConnection(targetEmail)
     if (!pc) return
 
-    await pc.setRemoteDescription(new RTCSessionDescription(message.answer))
-  }
+    if (pc.signalingState !== 'stable') return
 
-  const handleIceCandidate = async (message) => {
-    const fromUserId = message.fromUserId
-    if (!fromUserId || !message.candidate) return
-
-    const pc = peerConnectionsRef.current[fromUserId]
-    if (!pc) return
-
-    await pc.addIceCandidate(new RTCIceCandidate(message.candidate))
-  }
-
-  const sendOfferTo = async (targetUserId, targetEmail = '') => {
-    if (!targetUserId || targetUserId === selfUserId) return
-
-    const pc = createPeerConnection(targetUserId, targetEmail)
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
 
-    addOrUpdateParticipant({
-      id: targetUserId,
-      label: targetEmail || targetUserId,
-      email: targetEmail,
-      stream: null,
-      cameraOn: true,
-      role: 'PARTICIPANT',
-      isHost: false,
-    })
-
     sendSignal({
-      action: 'sendOffer',
+      action: 'signal',
+      type: 'offer',
       meetingId: roomName,
-      toUserId: targetUserId,
-      fromUserId: selfUserId,
-      offer,
+      from: selfEmail,
+      to: targetEmail,
+      payload: offer,
     })
   }
 
   const handleSignalMessage = async (event) => {
-    let message = null
+    let message
     try {
       message = JSON.parse(event.data)
     } catch {
       return
     }
 
-    if (!message?.type) return
+    const type = (message?.type || '').toLowerCase()
+    if (!['offer', 'answer', 'ice', 'candidate'].includes(type)) return
+
+    const fromEmail = (message.from || message.fromEmail || '').trim()
+    const toEmail = (message.to || message.toEmail || '').trim()
+
+    if (!fromEmail) return
+    if (toEmail && safeId(toEmail) !== selfEmailKey) return
+
+    const remoteKey = safeId(fromEmail)
 
     try {
-      if (message.type === 'EXISTING_PARTICIPANTS') {
-        const existing = Array.isArray(message.participants) ? message.participants : []
-        for (const participant of existing) {
-          await sendOfferTo(participant.userId, participant.email || '')
-        }
+      if (type === 'offer') {
+        const pc = createPeerConnection(fromEmail)
+        if (!pc) return
+
+        const offer = message.payload || message.offer
+        if (!offer) return
+
+        await pc.setRemoteDescription(new RTCSessionDescription(offer))
+        const answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        sendSignal({
+          action: 'signal',
+          type: 'answer',
+          meetingId: roomName,
+          from: selfEmail,
+          to: fromEmail,
+          payload: answer,
+        })
+
+        addOrUpdateParticipant({
+          id: fromEmail,
+          label: fromEmail,
+          email: fromEmail,
+          stream: null,
+          cameraOn: true,
+          role: 'PARTICIPANT',
+          isHost:
+            !!hostUserId &&
+            (safeId(hostUserId) === remoteKey || safeId(hostUserId) === safeId(fromEmail)),
+        })
       }
 
-      if (message.type === 'PARTICIPANT_JOINED') {
-        await sendOfferTo(message.userId, message.email || '')
+      if (type === 'answer') {
+        const pc = peerConnectionsRef.current[remoteKey]
+        if (!pc) return
+        const answer = message.payload || message.answer
+        if (!answer) return
+        await pc.setRemoteDescription(new RTCSessionDescription(answer))
       }
 
-      if (message.type === 'OFFER') {
-        await handleOffer(message)
-      }
-
-      if (message.type === 'ANSWER') {
-        await handleAnswer(message)
-      }
-
-      if (message.type === 'ICE_CANDIDATE') {
-        await handleIceCandidate(message)
-      }
-
-      if (message.type === 'PARTICIPANT_LEFT' && message.userId) {
-        const pc = peerConnectionsRef.current[message.userId]
-        if (pc) {
-          pc.close()
-          delete peerConnectionsRef.current[message.userId]
-        }
-        removeParticipant(message.userId)
+      if (type === 'ice' || type === 'candidate') {
+        const pc = peerConnectionsRef.current[remoteKey]
+        if (!pc) return
+        const candidate = message.payload || message.candidate
+        if (!candidate) return
+        await pc.addIceCandidate(new RTCIceCandidate(candidate))
       }
     } catch {
-      setStatusError('Realtime connection error occurred.')
+      setStatusError('Realtime signaling failed during WebRTC negotiation.')
     }
   }
 
@@ -245,28 +244,20 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         return
       }
 
-      if (!SIGNALING_WS_URL) {
+      const wsUrl = normalizeWsUrl(SIGNALING_WS_URL, roomName, selfEmail)
+      if (!wsUrl) {
         setStatusError('Signaling WebSocket URL is not configured.')
         return
       }
 
-      const socket = new WebSocket(SIGNALING_WS_URL)
+      const socket = new WebSocket(wsUrl)
       wsRef.current = socket
-
-      socket.onopen = () => {
-        sendSignal({
-          action: 'JOIN_MEETING',
-          meetingId: roomName,
-          userId: selfUserId,
-          email: selfEmail,
-        })
-      }
 
       socket.onmessage = handleSignalMessage
 
       socket.onclose = () => {
         if (!unmounted) {
-          setStatusError('WebSocket disconnected. Reconnect by rejoining meeting.')
+          setStatusError('WebSocket disconnected. Rejoin meeting to reconnect.')
         }
       }
 
@@ -275,7 +266,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       }
     }
 
-    if (roomName && selfUserId) {
+    if (roomName && selfEmail) {
       startMediaAndSignaling()
     }
 
@@ -297,7 +288,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       setLocalStream(null)
       setParticipants([])
     }
-  }, [roomName, selfUserId, selfEmail])
+  }, [roomName, selfEmail])
 
   useEffect(() => {
     let cancelled = false
@@ -313,44 +304,53 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         return
       }
 
-      const status = (response.data?.status || 'UNKNOWN').toUpperCase()
+      const data = response.data || {}
+      const status = (data.status || 'UNKNOWN').toUpperCase()
       setMeetingStatus(status)
 
-      if (response.data?.hostUserId) {
-        setHostUserId(response.data.hostUserId)
-      }
+      const hostId = (data.hostUserId || '').trim()
+      setHostUserId(hostId)
 
-      if (Array.isArray(response.data?.participants)) {
-        const deduped = new Map()
-        response.data.participants.forEach((participant) => {
-          const email = (participant?.userEmail || participant?.email || '').trim()
-          if (!email) return
-          const key = email.toLowerCase()
-          if (selfEmail && key === selfEmail.toLowerCase()) return
-          if (!deduped.has(key)) {
-            deduped.set(key, {
-              id: participant.userId || email,
-              label: email,
-              email,
-              stream: null,
-              cameraOn: true,
-              role: participant.role || 'PARTICIPANT',
-              isHost: !!participant.isHost || (hostUserId && key === hostUserId.toLowerCase()),
-            })
-          }
+      const participantsFromApi = Array.isArray(data.participants) ? data.participants : []
+      const deduped = new Map()
+
+      participantsFromApi.forEach((participant) => {
+        const email = (participant?.userEmail || participant?.email || '').trim()
+        if (!email) return
+
+        const key = safeId(email)
+        if (!key || key === selfEmailKey || deduped.has(key)) return
+
+        deduped.set(key, {
+          id: email,
+          label: email,
+          email,
+          stream: null,
+          cameraOn: true,
+          role: participant?.role || 'PARTICIPANT',
+          isHost: !!participant?.isHost || (!!hostId && safeId(hostId) === key),
+        })
+      })
+
+      setParticipants((prev) => {
+        const prevByKey = new Map(prev.map((item) => [safeId(item.email || item.id), item]))
+        const merged = []
+
+        deduped.forEach((incoming, key) => {
+          const existing = prevByKey.get(key)
+          merged.push(existing ? { ...incoming, stream: existing.stream || null } : incoming)
         })
 
-        setParticipants((prev) => {
-          const byEmail = new Map(prev.map((item) => [item.email.toLowerCase(), item]))
-          const merged = []
+        return merged
+      })
 
-          deduped.forEach((incoming, key) => {
-            const existing = byEmail.get(key)
-            merged.push(existing ? { ...incoming, stream: existing.stream || null } : incoming)
-          })
-
-          return merged
-        })
+      // Initiate offers to participants we know but don't have peer connection for yet.
+      for (const participant of deduped.values()) {
+        const key = safeId(participant.email)
+        if (!peerConnectionsRef.current[key]) {
+          // eslint-disable-next-line no-await-in-loop
+          await sendOfferTo(participant.email)
+        }
       }
 
       if (status === 'EXPIRED') {
@@ -365,7 +365,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       cancelled = true
       window.clearInterval(timerId)
     }
-  }, [roomName, onNavigate, selfEmail, hostUserId])
+  }, [roomName, onNavigate, selfEmailKey])
 
   const handleToggle = (key) => {
     setControls((prev) => {
@@ -377,7 +377,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
       if (key === 'mute' && localStreamRef.current) {
         localStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = next.mute
+          track.enabled = !next.mute
         })
       }
 
@@ -396,13 +396,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     if (!confirmed) return
 
     setIsLeaving(true)
-
-    sendSignal({
-      action: 'LEAVE_MEETING',
-      meetingId: roomName,
-      userId: selfUserId,
-      email: selfEmail,
-    })
 
     Object.values(peerConnectionsRef.current).forEach((pc) => pc.close())
     peerConnectionsRef.current = {}
