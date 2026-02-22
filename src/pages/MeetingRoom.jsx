@@ -25,6 +25,10 @@ function normalizeWsUrl(baseUrl, meetingId, email) {
   return `${trimmed}${separator}meetingId=${encodeURIComponent(meetingId)}&email=${encodeURIComponent(email)}`
 }
 
+function shouldInitiateOffer(selfEmail, targetEmail) {
+  return safeId(selfEmail) < safeId(targetEmail)
+}
+
 function MeetingRoom({ onNavigate, roomPath, user }) {
   const [controls, setControls] = useState(initialControls)
   const [theme, setTheme] = useState('light')
@@ -38,6 +42,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const wsRef = useRef(null)
   const peerConnectionsRef = useRef({})
   const localStreamRef = useRef(null)
+  const pendingIceCandidatesRef = useRef({})
 
   const roomName = useMemo(() => roomPath.split('/').at(-1) || '', [roomPath])
   const selfName = user?.name || user?.email || 'You'
@@ -68,12 +73,36 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     const key = safeId(participantKey)
     if (!key) return
     setParticipants((prev) => prev.filter((item) => safeId(item.email || item.id) !== key))
+    delete pendingIceCandidatesRef.current[key]
   }
 
   const sendSignal = (payload) => {
     const socket = wsRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN) return
     socket.send(JSON.stringify(payload))
+  }
+
+  const flushPendingIceCandidates = async (remoteKey, pc) => {
+    const queued = pendingIceCandidatesRef.current[remoteKey] || []
+    if (!queued.length) return
+
+    pendingIceCandidatesRef.current[remoteKey] = []
+
+    for (const candidate of queued) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await pc.addIceCandidate(new RTCIceCandidate(candidate))
+      } catch (error) {
+        console.error('[WebRTC] Failed to flush ICE candidate', error)
+      }
+    }
+  }
+
+  const queueIceCandidate = (remoteKey, candidate) => {
+    if (!pendingIceCandidatesRef.current[remoteKey]) {
+      pendingIceCandidatesRef.current[remoteKey] = []
+    }
+    pendingIceCandidatesRef.current[remoteKey].push(candidate)
   }
 
   const createPeerConnection = (remoteEmail) => {
@@ -94,6 +123,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     pc.onicecandidate = (event) => {
       if (!event.candidate) return
 
+      console.log('[WebRTC] Sending ICE candidate to', remoteEmail)
+
       sendSignal({
         action: 'signal',
         type: 'ice',
@@ -107,6 +138,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     pc.ontrack = (event) => {
       const [remoteStream] = event.streams
       if (!remoteStream) return
+
+      console.log('[WebRTC] Remote track received from', remoteEmail)
 
       addOrUpdateParticipant({
         id: remoteEmail,
@@ -123,6 +156,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     pc.onconnectionstatechange = () => {
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+        console.log('[WebRTC] Connection state', pc.connectionState, 'for', remoteEmail)
         removeParticipant(remoteEmail)
       }
     }
@@ -134,23 +168,29 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const sendOfferTo = async (targetEmail) => {
     const targetKey = safeId(targetEmail)
     if (!targetKey || targetKey === selfEmailKey) return
+    if (!shouldInitiateOffer(selfEmail, targetEmail)) return
 
     const pc = createPeerConnection(targetEmail)
     if (!pc) return
-
     if (pc.signalingState !== 'stable') return
 
-    const offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
+    try {
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
 
-    sendSignal({
-      action: 'signal',
-      type: 'offer',
-      meetingId: roomName,
-      from: selfEmail,
-      to: targetEmail,
-      payload: offer,
-    })
+      console.log('[WebRTC] Sending offer to', targetEmail)
+
+      sendSignal({
+        action: 'signal',
+        type: 'offer',
+        meetingId: roomName,
+        from: selfEmail,
+        to: targetEmail,
+        payload: offer,
+      })
+    } catch (error) {
+      console.error('[WebRTC] Failed to send offer', error)
+    }
   }
 
   const handleSignalMessage = async (event) => {
@@ -180,9 +220,18 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         const offer = message.payload || message.offer
         if (!offer) return
 
+        if (pc.signalingState !== 'stable') {
+          await pc.setLocalDescription({ type: 'rollback' })
+        }
+
+        console.log('[WebRTC] Received offer from', fromEmail)
         await pc.setRemoteDescription(new RTCSessionDescription(offer))
+        await flushPendingIceCandidates(remoteKey, pc)
+
         const answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
+
+        console.log('[WebRTC] Sending answer to', fromEmail)
 
         sendSignal({
           action: 'signal',
@@ -209,19 +258,30 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       if (type === 'answer') {
         const pc = peerConnectionsRef.current[remoteKey]
         if (!pc) return
+
         const answer = message.payload || message.answer
         if (!answer) return
+
+        console.log('[WebRTC] Received answer from', fromEmail)
         await pc.setRemoteDescription(new RTCSessionDescription(answer))
+        await flushPendingIceCandidates(remoteKey, pc)
       }
 
       if (type === 'ice' || type === 'candidate') {
-        const pc = peerConnectionsRef.current[remoteKey]
-        if (!pc) return
         const candidate = message.payload || message.candidate
         if (!candidate) return
+
+        const pc = peerConnectionsRef.current[remoteKey]
+        if (!pc || !pc.remoteDescription) {
+          queueIceCandidate(remoteKey, candidate)
+          return
+        }
+
+        console.log('[WebRTC] Received ICE from', fromEmail)
         await pc.addIceCandidate(new RTCIceCandidate(candidate))
       }
-    } catch {
+    } catch (error) {
+      console.error('[WebRTC] Negotiation error', error)
       setStatusError('Realtime signaling failed during WebRTC negotiation.')
     }
   }
@@ -250,8 +310,13 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         return
       }
 
+      console.log('[WebSocket] Connecting:', wsUrl)
       const socket = new WebSocket(wsUrl)
       wsRef.current = socket
+
+      socket.onopen = () => {
+        console.log('[WebSocket] Connected')
+      }
 
       socket.onmessage = handleSignalMessage
 
@@ -285,6 +350,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         localStreamRef.current.getTracks().forEach((track) => track.stop())
       }
       localStreamRef.current = null
+      pendingIceCandidatesRef.current = {}
       setLocalStream(null)
       setParticipants([])
     }
@@ -344,7 +410,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         return merged
       })
 
-      // Initiate offers to participants we know but don't have peer connection for yet.
       for (const participant of deduped.values()) {
         const key = safeId(participant.email)
         if (!peerConnectionsRef.current[key]) {
