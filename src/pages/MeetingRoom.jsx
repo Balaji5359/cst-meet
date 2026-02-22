@@ -45,6 +45,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const localStreamRef = useRef(null)
   const pendingIceCandidatesRef = useRef({})
   const pendingSignalsRef = useRef([])
+  const reconnectTimersRef = useRef({})
 
   const roomName = useMemo(() => roomPath.split('/').at(-1) || '', [roomPath])
   const selfName = user?.name || user?.email || 'You'
@@ -77,6 +78,37 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     setParticipants((prev) => prev.filter((item) => safeId(item.email || item.id) !== key))
     delete pendingIceCandidatesRef.current[key]
   }
+  const clearReconnectTimer = (participantKey) => {
+    const key = safeId(participantKey)
+    if (!key) return
+
+    const timer = reconnectTimersRef.current[key]
+    if (timer) {
+      window.clearTimeout(timer)
+      delete reconnectTimersRef.current[key]
+    }
+  }
+
+  const clearPeerConnection = (participantKey) => {
+    const key = safeId(participantKey)
+    if (!key) return
+
+    const existing = peerConnectionsRef.current[key]
+    if (existing) {
+      try {
+        existing.onicecandidate = null
+        existing.ontrack = null
+        existing.onconnectionstatechange = null
+        existing.close()
+      } catch {
+        // ignore close errors
+      }
+      delete peerConnectionsRef.current[key]
+    }
+
+    delete pendingIceCandidatesRef.current[key]
+    clearReconnectTimer(key)
+  }
 
   const flushPendingSignals = () => {
     const socket = wsRef.current
@@ -106,6 +138,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     if (peerConnectionsRef.current[remoteKey]) {
       return peerConnectionsRef.current[remoteKey]
     }
+
+    clearReconnectTimer(remoteKey)
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
 
@@ -149,9 +183,26 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
 
     pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        clearReconnectTimer(remoteEmail)
+        return
+      }
+
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
         console.log('[WebRTC] Connection state', pc.connectionState, 'for', remoteEmail)
+
+        clearPeerConnection(remoteEmail)
         removeParticipant(remoteEmail)
+
+        if (pc.connectionState !== 'closed') {
+          const retryKey = safeId(remoteEmail)
+          reconnectTimersRef.current[retryKey] = window.setTimeout(() => {
+            delete reconnectTimersRef.current[retryKey]
+            if (wsReadyRef.current) {
+              sendOfferTo(remoteEmail)
+            }
+          }, 1200)
+        }
       }
     }
 
@@ -379,7 +430,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       wsRef.current = null
       wsReadyRef.current = false
 
-      Object.values(peerConnectionsRef.current).forEach((pc) => pc.close())
+      Object.keys(peerConnectionsRef.current).forEach((key) => clearPeerConnection(key))
       peerConnectionsRef.current = {}
 
       if (localStreamRef.current) {
@@ -388,6 +439,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       localStreamRef.current = null
       pendingIceCandidatesRef.current = {}
       pendingSignalsRef.current = []
+      Object.values(reconnectTimersRef.current).forEach((timerId) => window.clearTimeout(timerId))
+      reconnectTimersRef.current = {}
       setLocalStream(null)
       setParticipants([])
     }
@@ -499,8 +552,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     setIsLeaving(true)
 
-    Object.values(peerConnectionsRef.current).forEach((pc) => pc.close())
-    peerConnectionsRef.current = {}
+    Object.keys(peerConnectionsRef.current).forEach((key) => clearPeerConnection(key))
+      peerConnectionsRef.current = {}
 
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop())
