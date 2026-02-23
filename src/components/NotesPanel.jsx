@@ -1,12 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
-function NotesPanel({ open, onClose }) {
-  const [notes, setNotes] = useState('')
-  const [saved, setSaved] = useState(false)
+function NotesPanel({ open, onClose, initialValue = '', onSave }) {
+  const [notes, setNotes] = useState(initialValue)
+  const [saveStatus, setSaveStatus] = useState('idle')
 
-  const handleSave = () => {
-    setSaved(true)
-    setTimeout(() => setSaved(false), 1200)
+  useEffect(() => {
+    setNotes(initialValue || '')
+  }, [initialValue, open])
+
+  const handleSave = async () => {
+    if (!onSave) return
+
+    setSaveStatus('saving')
+    const ok = await onSave(notes)
+    setSaveStatus(ok ? 'saved' : 'error')
+    setTimeout(() => setSaveStatus('idle'), 1400)
   }
 
   return (
@@ -22,8 +30,14 @@ function NotesPanel({ open, onClose }) {
         onChange={(event) => setNotes(event.target.value)}
         placeholder="Write notes here..."
       />
-      <button type="button" className="save-notes-btn" onClick={handleSave}>
-        {saved ? 'Saved' : 'Save'}
+      <button type="button" className="save-notes-btn" onClick={handleSave} disabled={saveStatus === 'saving'}>
+        {saveStatus === 'saving'
+          ? 'Saving...'
+          : saveStatus === 'saved'
+            ? 'Saved'
+            : saveStatus === 'error'
+              ? 'Retry Save'
+              : 'Save'}
       </button>
     </aside>
   )

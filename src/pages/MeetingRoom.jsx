@@ -3,7 +3,14 @@ import Header from '../components/Header'
 import VideoGrid from '../components/VideoGrid'
 import ControlBar from '../components/ControlBar'
 import NotesPanel from '../components/NotesPanel'
-import { extractErrorMessage, getMeetingStatus, leaveMeeting } from '../services/meetApi'
+import {
+  extractErrorMessage,
+  getMeetingStatus,
+  getUserNotes,
+  leaveMeeting,
+  saveUserNote,
+  saveUserRecording,
+} from '../services/meetApi'
 import { ICE_SERVERS, SIGNALING_WS_URL } from '../config/realtime'
 
 const initialControls = {
@@ -30,6 +37,25 @@ function shouldInitiateOffer(selfEmail, targetEmail) {
   return safeId(selfEmail) < safeId(targetEmail)
 }
 
+function formatRecordingLabel(seconds) {
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result || '')
+      const base64 = result.includes(',') ? result.split(',')[1] : result
+      resolve(base64)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
 function MeetingRoom({ onNavigate, roomPath, user }) {
   const [controls, setControls] = useState(initialControls)
   const [theme, setTheme] = useState('light')
@@ -45,6 +71,10 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const [canScrollTop, setCanScrollTop] = useState(false)
   const [canScrollBottom, setCanScrollBottom] = useState(false)
   const [participantsScroll, setParticipantsScroll] = useState({ canPrev: false, canNext: false })
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
+  const [recordingStatus, setRecordingStatus] = useState('')
+  const [isRecordingBusy, setIsRecordingBusy] = useState(false)
+  const [noteInitialValue, setNoteInitialValue] = useState('')
 
   const wsRef = useRef(null)
   const wsReadyRef = useRef(false)
@@ -58,6 +88,9 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const wsReconnectTimerRef = useRef(null)
   const isLeavingRef = useRef(false)
   const participantsScrollRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const recordingChunksRef = useRef([])
+  const recordingTimerRef = useRef(null)
 
   const roomName = useMemo(() => roomPath.split('/').at(-1) || '', [roomPath])
   const selfName = user?.name || user?.email || 'You'
@@ -132,7 +165,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         existing.oniceconnectionstatechange = null
         existing.close()
       } catch {
-        // ignore close errors
+        // ignore
       }
       delete peerConnectionsRef.current[key]
     }
@@ -147,10 +180,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     const queued = pendingSignalsRef.current
     pendingSignalsRef.current = []
-
-    queued.forEach((payload) => {
-      socket.send(JSON.stringify(payload))
-    })
+    queued.forEach((payload) => socket.send(JSON.stringify(payload)))
   }
 
   const sendSignal = (payload) => {
@@ -275,6 +305,118 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
   }
 
+  const setRecordingControl = (enabled) => {
+    setControls((prev) => {
+      const next = { ...prev, record: enabled }
+      sendParticipantState(next)
+      return next
+    })
+  }
+
+  const startRecordingFlow = () => {
+    if (isRecordingBusy || controls.record) return
+
+    const approved = window.confirm('Start recording now?')
+    if (!approved) return
+
+    const stream = localStreamRef.current || cameraStreamRef.current
+    if (!stream) {
+      setStatusError('Local media stream not ready for recording.')
+      return
+    }
+
+    if (typeof MediaRecorder === 'undefined') {
+      setStatusError('Recording is not supported in this browser.')
+      return
+    }
+
+    try {
+      recordingChunksRef.current = []
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' })
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordingChunksRef.current.push(event.data)
+        }
+      }
+
+      recorder.start(1000)
+      mediaRecorderRef.current = recorder
+      setRecordingControl(true)
+      setRecordingSeconds(0)
+      setRecordingStatus('Recording in progress...')
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1)
+      }, 1000)
+    } catch {
+      setStatusError('Failed to start recording.')
+    }
+  }
+
+  const stopRecordingFlow = async () => {
+    if (!controls.record || isRecordingBusy) return
+
+    const recorder = mediaRecorderRef.current
+    if (!recorder) {
+      setRecordingControl(false)
+      return
+    }
+
+    setIsRecordingBusy(true)
+
+    const stoppedBlob = await new Promise((resolve) => {
+      recorder.onstop = () => {
+        resolve(new Blob(recordingChunksRef.current, { type: 'video/webm' }))
+      }
+      recorder.stop()
+    })
+
+    mediaRecorderRef.current = null
+    if (recordingTimerRef.current) {
+      window.clearInterval(recordingTimerRef.current)
+      recordingTimerRef.current = null
+    }
+
+    setRecordingControl(false)
+    setRecordingStatus('')
+
+    const shouldSave = window.confirm('Save this recording?')
+    if (shouldSave) {
+      try {
+        const contentBase64 = await fileToBase64(stoppedBlob)
+        const response = await saveUserRecording({
+          email: selfEmail,
+          meetingid: roomName,
+          extension: 'webm',
+          mimeType: 'video/webm',
+          contentBase64,
+        })
+
+        if (!response.ok) {
+          setStatusError(extractErrorMessage(response))
+        } else {
+          setRecordingStatus('Recording saved.')
+          window.setTimeout(() => setRecordingStatus(''), 2200)
+        }
+      } catch {
+        setStatusError('Recording save failed.')
+      }
+    }
+
+    setRecordingSeconds(0)
+    setIsRecordingBusy(false)
+  }
+
+  const handleSaveNote = async (text) => {
+    const response = await saveUserNote({ email: selfEmail, meetingid: roomName, noteText: text })
+    if (!response.ok) {
+      setStatusError(extractErrorMessage(response))
+      return false
+    }
+    setStatusError('')
+    return true
+  }
+
   const sendOfferTo = async (targetEmail) => {
     const targetKey = safeId(targetEmail)
     if (!targetKey || targetKey === selfEmailKey) return
@@ -300,8 +442,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     try {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
-
-      console.log('[WebRTC] Sending offer to', targetEmail)
 
       sendSignal({
         action: 'signal',
@@ -585,6 +725,11 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     return () => {
       unmounted = true
 
+      if (recordingTimerRef.current) {
+        window.clearInterval(recordingTimerRef.current)
+        recordingTimerRef.current = null
+      }
+
       if (wsReconnectTimerRef.current) {
         window.clearTimeout(wsReconnectTimerRef.current)
         wsReconnectTimerRef.current = null
@@ -696,6 +841,28 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
   }, [roomName, onNavigate, selfEmailKey])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadLatestNote = async () => {
+      if (!controls.notes || !selfEmail) return
+
+      const response = await getUserNotes(selfEmail)
+      if (cancelled || !response.ok) return
+
+      const items = Array.isArray(response.data?.items) ? response.data.items : []
+      const meetingItems = items.filter((item) => String(item.filename || '').includes(`_${roomName}_`))
+      if (meetingItems.length > 0) {
+        setNoteInitialValue(`Latest saved note file: ${meetingItems[0].filename}`)
+      }
+    }
+
+    loadLatestNote()
+    return () => {
+      cancelled = true
+    }
+  }, [controls.notes, selfEmail, roomName])
+
   const handleScreenShareToggle = async () => {
     if (isScreenSharing) {
       await stopScreenShare()
@@ -707,10 +874,18 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
   const handleToggle = (key) => {
     if (key === 'screenshare') {
-      handleScreenShareToggle().catch((error) => {
-        console.error('[WebRTC] Screen share toggle failed', error)
+      handleScreenShareToggle().catch(() => {
         setStatusError('Unable to toggle screen share.')
       })
+      return
+    }
+
+    if (key === 'record') {
+      if (controls.record) {
+        stopRecordingFlow()
+      } else {
+        startRecordingFlow()
+      }
       return
     }
 
@@ -733,7 +908,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         })
       }
 
-      if (key === 'mute' || key === 'camera' || key === 'record') {
+      if (key === 'mute' || key === 'camera') {
         sendParticipantState(next)
       }
 
@@ -744,6 +919,10 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const handleLeaveMeeting = async () => {
     const confirmed = window.confirm('Are you sure you want to leave this meeting?')
     if (!confirmed) return
+
+    if (controls.record) {
+      await stopRecordingFlow()
+    }
 
     setIsLeaving(true)
     isLeavingRef.current = true
@@ -850,6 +1029,10 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       <Header title={`Meeting: ${roomName}`} subtitle={`Status: ${meetingStatus}`} />
 
       {statusError ? <p className="api-error">{statusError}</p> : null}
+      {recordingStatus ? <p className="api-error">{recordingStatus}</p> : null}
+      {controls.record ? (
+        <p className="recording-banner">Recording {formatRecordingLabel(recordingSeconds)}</p>
+      ) : null}
       {mediaBlocked && !localStream ? (
         <button className="control-btn active" onClick={handleEnableMedia}>
           Enable Camera & Mic
@@ -872,13 +1055,19 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         onParticipantsScroll={handleParticipantsScroll}
       />
 
-      <ControlBar controls={controls}
+      <ControlBar
+        controls={controls}
         onToggle={handleToggle}
         onLeave={handleLeaveMeeting}
         leaveLabel={isLeaving ? 'Leaving...' : 'Leave'}
       />
 
-      <NotesPanel open={controls.notes} onClose={() => handleToggle('notes')} />
+      <NotesPanel
+        open={controls.notes}
+        onClose={() => handleToggle('notes')}
+        initialValue={noteInitialValue}
+        onSave={handleSaveNote}
+      />
 
       <div className="scroll-fabs">
         <button
@@ -905,19 +1094,3 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 }
 
 export default MeetingRoom
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

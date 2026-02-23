@@ -1,4 +1,5 @@
 const API_BASE_URL = 'https://gc4a7icjti.execute-api.ap-south-1.amazonaws.com/dev'
+const USER_DATA_PATH = '/meetlite-user-data'
 
 function tryParseJson(rawText) {
   if (!rawText) return null
@@ -65,6 +66,10 @@ function get(path) {
   return request(path, { method: 'GET' })
 }
 
+function runUserDataTask(payload) {
+  return postJson(USER_DATA_PATH, payload)
+}
+
 export async function createMeeting(userId) {
   return postJson('/meeting/create', { userId })
 }
@@ -81,6 +86,42 @@ export async function leaveMeeting(meetingId, userEmail) {
 
 export async function getMeetingStatus(meetingId) {
   return postJson('/meeting/getid', { meetingId })
+}
+
+export async function getUserMeetings(email) {
+  return runUserDataTask({ email, task: 'getmeetings' })
+}
+
+export async function saveUserRecording({ email, meetingid, fileName, extension, mimeType, contentBase64 }) {
+  return runUserDataTask({
+    email,
+    meetingid,
+    task: 'saverecording',
+    fileName,
+    extension,
+    mimeType,
+    contentBase64,
+  })
+}
+
+export async function getUserRecordings(email) {
+  return runUserDataTask({ email, task: 'getrecording' })
+}
+
+export async function getRecordingPreview({ email, meetingid, key }) {
+  return runUserDataTask({ email, meetingid, key, task: 'getrecordingpreview' })
+}
+
+export async function saveUserNote({ email, meetingid, noteText }) {
+  return runUserDataTask({ email, meetingid, noteText, task: 'savenote' })
+}
+
+export async function getUserNotes(email) {
+  return runUserDataTask({ email, task: 'getnotes' })
+}
+
+export async function getNotePreview({ email, meetingid, key }) {
+  return runUserDataTask({ email, meetingid, key, task: 'getnotepreview' })
 }
 
 export function extractErrorMessage(response) {

@@ -2,7 +2,7 @@ function ControlBar({ controls, onToggle, onLeave, leaveLabel = 'Leave' }) {
   const items = [
     { key: 'camera', label: controls.camera ? 'Camera On' : 'Camera Off' },
     { key: 'mute', label: controls.mute ? 'Unmute' : 'Mute' },
-    { key: 'record', label: controls.record ? 'Recording' : 'Record' },
+    { key: 'record', label: controls.record ? 'Stop Recording' : 'Record' },
     { key: 'notes', label: controls.notes ? 'Close Notes' : 'Notes' },
     { key: 'screenshare', label: controls.screenshare ? 'Stop Share' : 'Share' },
     { key: 'theme', label: controls.theme ? 'Light' : 'Dark' },
@@ -28,3 +28,4 @@ function ControlBar({ controls, onToggle, onLeave, leaveLabel = 'Leave' }) {
 }
 
 export default ControlBar
+

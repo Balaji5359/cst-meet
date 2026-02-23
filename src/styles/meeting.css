@@ -314,3 +314,14 @@
     justify-content: center;
   }
 }
+
+.recording-banner {
+  margin: 0;
+  padding: 0.45rem 0.7rem;
+  width: fit-content;
+  border-radius: 0.65rem;
+  background: #de2d2d;
+  color: #fff;
+  font-weight: 700;
+}
+

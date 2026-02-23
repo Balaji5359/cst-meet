@@ -1,6 +1,39 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Header from '../components/Header'
-import { createMeeting, extractErrorMessage, joinMeeting } from '../services/meetApi'
+import {
+  createMeeting,
+  extractErrorMessage,
+  getNotePreview,
+  getRecordingPreview,
+  getUserMeetings,
+  getUserNotes,
+  getUserRecordings,
+  joinMeeting,
+} from '../services/meetApi'
+
+function formatDateLabel(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleString()
+}
+
+function extractMeetingIdFromFileName(filename) {
+  if (!filename) return ''
+  const normalized = filename.replace(/\.[^/.]+$/, '')
+  const parts = normalized.split('_')
+  if (parts.length < 3) return ''
+  return parts[1] || ''
+}
+
+function formatDisplayFileName(filename) {
+  if (!filename) return '-'
+  const extMatch = filename.match(/\.([a-zA-Z0-9]+)$/)
+  const ext = extMatch ? extMatch[1] : ''
+  const meetingId = extractMeetingIdFromFileName(filename)
+  if (!meetingId) return filename
+  return ext ? `${meetingId}.${ext}` : meetingId
+}
 
 function Dashboard({ onNavigate, user, onSignOut }) {
   const [roomId, setRoomId] = useState('')
@@ -10,46 +43,24 @@ function Dashboard({ onNavigate, user, onSignOut }) {
   const [createdMeetingId, setCreatedMeetingId] = useState('')
   const [showCreatedModal, setShowCreatedModal] = useState(false)
   const [copyStatus, setCopyStatus] = useState('')
+  const [loadingMeta, setLoadingMeta] = useState(false)
+  const [meetingRows, setMeetingRows] = useState([])
+  const [recordingItems, setRecordingItems] = useState([])
+  const [noteItems, setNoteItems] = useState([])
+  const [previewState, setPreviewState] = useState({
+    open: false,
+    type: '',
+    title: '',
+    loading: false,
+    error: '',
+    videoUrl: '',
+    noteText: '',
+    fileName: '',
+  })
 
   const userName = user?.name || 'User'
   const userEmail = user?.email || ''
   const userId = user?.userId || ''
-
-  const dashboardStats = useMemo(
-    () => ({
-      meetingsToday: 4,
-      totalMeetings: 18,
-      timeSpent: '6h 20m',
-    }),
-    [],
-  )
-
-  const previousMeetings = useMemo(
-    () => [
-      { id: 'C9D34F', date: 'Today', duration: '52m', role: 'Host' },
-      { id: 'EC55E8', date: 'Today', duration: '34m', role: 'Participant' },
-      { id: '19850A', date: 'Yesterday', duration: '1h 12m', role: 'Host' },
-      { id: 'FE6B83', date: 'Yesterday', duration: '27m', role: 'Participant' },
-    ],
-    [],
-  )
-
-  const recordingItems = useMemo(
-    () => [
-      { name: 'C9D34F - Design Review', time: 'Today, 6:30 PM' },
-      { name: '19850A - Sprint Planning', time: 'Yesterday, 2:10 PM' },
-    ],
-    [],
-  )
-
-  const noteItems = useMemo(
-    () => [
-      { title: 'Backend tasks', preview: 'Connect meeting list API and analytics API.' },
-      { title: 'UI follow-up', preview: 'Finalize mobile tile spacing and AI chat API.' },
-      { title: 'Release notes', preview: 'Prepare change log for next deployment.' },
-    ],
-    [],
-  )
 
   const faqs = useMemo(
     () => [
@@ -62,6 +73,60 @@ function Dashboard({ onNavigate, user, onSignOut }) {
     [],
   )
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadMeta = async () => {
+      if (!userEmail) return
+      setLoadingMeta(true)
+
+      const [meetingsRes, recordingsRes, notesRes] = await Promise.all([
+        getUserMeetings(userEmail),
+        getUserRecordings(userEmail),
+        getUserNotes(userEmail),
+      ])
+
+      if (cancelled) return
+
+      if (meetingsRes.ok) {
+        setMeetingRows(Array.isArray(meetingsRes.data?.meetings) ? meetingsRes.data.meetings : [])
+      }
+
+      if (recordingsRes.ok) {
+        setRecordingItems(Array.isArray(recordingsRes.data?.items) ? recordingsRes.data.items : [])
+      }
+
+      if (notesRes.ok) {
+        setNoteItems(Array.isArray(notesRes.data?.items) ? notesRes.data.items : [])
+      }
+
+      setLoadingMeta(false)
+    }
+
+    loadMeta()
+    return () => {
+      cancelled = true
+    }
+  }, [userEmail])
+
+  const dashboardStats = useMemo(() => {
+    const meetingsToday = meetingRows.filter((meeting) => {
+      const created = new Date(meeting.createdAt || 0)
+      const now = new Date()
+      return created.toDateString() === now.toDateString()
+    }).length
+
+    const totalMinutes = meetingRows.reduce((sum, meeting) => sum + Number(meeting.myDurationMinutes || 0), 0)
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = Math.round(totalMinutes % 60)
+
+    return {
+      meetingsToday,
+      totalMeetings: meetingRows.length,
+      timeSpent: `${hours}h ${minutes}m`,
+    }
+  }, [meetingRows])
+
   const askAi = (question) => {
     window.dispatchEvent(new CustomEvent('meetlite-ai-ask', { detail: { question } }))
   }
@@ -69,6 +134,19 @@ function Dashboard({ onNavigate, user, onSignOut }) {
   const resetPopup = () => {
     setShowCreatedModal(false)
     setCopyStatus('')
+  }
+
+  const closePreview = () => {
+    setPreviewState({
+      open: false,
+      type: '',
+      title: '',
+      loading: false,
+      error: '',
+      videoUrl: '',
+      noteText: '',
+      fileName: '',
+    })
   }
 
   const copyToClipboard = async (value) => {
@@ -132,6 +210,106 @@ function Dashboard({ onNavigate, user, onSignOut }) {
     }
 
     onNavigate(`/meeting/${cleanMeetingId}`)
+  }
+
+  const handleOpenRecording = async (item) => {
+    const meetingid = extractMeetingIdFromFileName(item?.filename)
+    if (!meetingid) {
+      setPreviewState({
+        open: true,
+        type: 'recording',
+        title: 'Recording Preview',
+        loading: false,
+        error: 'Unable to detect meeting ID from file name.',
+        videoUrl: '',
+        noteText: '',
+        fileName: item?.filename || '',
+      })
+      return
+    }
+
+    setPreviewState({
+      open: true,
+      type: 'recording',
+      title: 'Recording Preview',
+      loading: true,
+      error: '',
+      videoUrl: '',
+      noteText: '',
+      fileName: item?.filename || '',
+    })
+
+    const response = await getRecordingPreview({
+      email: userEmail,
+      meetingid,
+      key: item?.key,
+    })
+
+    if (!response.ok) {
+      setPreviewState((current) => ({
+        ...current,
+        loading: false,
+        error: extractErrorMessage(response),
+      }))
+      return
+    }
+
+    setPreviewState((current) => ({
+      ...current,
+      loading: false,
+      videoUrl: response.data?.previewUrl || '',
+      error: response.data?.previewUrl ? '' : 'Preview URL was not returned by API.',
+    }))
+  }
+
+  const handleOpenNote = async (item) => {
+    const meetingid = extractMeetingIdFromFileName(item?.filename)
+    if (!meetingid) {
+      setPreviewState({
+        open: true,
+        type: 'note',
+        title: 'Note Preview',
+        loading: false,
+        error: 'Unable to detect meeting ID from file name.',
+        videoUrl: '',
+        noteText: '',
+        fileName: item?.filename || '',
+      })
+      return
+    }
+
+    setPreviewState({
+      open: true,
+      type: 'note',
+      title: 'Note Preview',
+      loading: true,
+      error: '',
+      videoUrl: '',
+      noteText: '',
+      fileName: item?.filename || '',
+    })
+
+    const response = await getNotePreview({
+      email: userEmail,
+      meetingid,
+      key: item?.key,
+    })
+
+    if (!response.ok) {
+      setPreviewState((current) => ({
+        ...current,
+        loading: false,
+        error: extractErrorMessage(response),
+      }))
+      return
+    }
+
+    setPreviewState((current) => ({
+      ...current,
+      loading: false,
+      noteText: response.data?.noteText || '',
+      error: response.data?.noteText ? '' : 'Note text is empty.',
+    }))
   }
 
   return (
@@ -217,19 +395,21 @@ function Dashboard({ onNavigate, user, onSignOut }) {
 
           <section className="dashboard-card side-panel">
             <h3>Meeting List</h3>
+            {loadingMeta ? <p>Loading meetings...</p> : null}
             <ul className="list-block">
-              {previousMeetings.map((meeting) => (
-                <li key={meeting.id}>
+              {meetingRows.map((meeting) => (
+                <li key={meeting.meetingId}>
                   <div>
-                    <strong>{meeting.id}</strong>
-                    <span>{meeting.date}</span>
+                    <strong>{meeting.meetingId}</strong>
+                    <span>{formatDateLabel(meeting.createdAt)}</span>
                   </div>
                   <div>
-                    <span>{meeting.duration}</span>
-                    <small>{meeting.role}</small>
+                    <span>{meeting.myDurationLabel || '-'}</span>
+                    <small>{meeting.status || '-'}</small>
                   </div>
                 </li>
               ))}
+              {!loadingMeta && meetingRows.length === 0 ? <li>No meetings found.</li> : null}
             </ul>
           </section>
 
@@ -237,13 +417,19 @@ function Dashboard({ onNavigate, user, onSignOut }) {
             <h3>Recordings</h3>
             <ul className="list-block compact">
               {recordingItems.map((item) => (
-                <li key={item.name}>
+                <li key={item.key || item.filename}>
                   <div>
-                    <strong>{item.name}</strong>
-                    <span>{item.time}</span>
+                    <strong>{formatDisplayFileName(item.filename)}</strong>
+                    <span>{formatDateLabel(item.lastModified)}</span>
+                  </div>
+                  <div className="list-action-wrap">
+                    <button type="button" className="list-action-btn" onClick={() => handleOpenRecording(item)}>
+                      View
+                    </button>
                   </div>
                 </li>
               ))}
+              {!loadingMeta && recordingItems.length === 0 ? <li>No recordings found.</li> : null}
             </ul>
           </section>
 
@@ -251,13 +437,19 @@ function Dashboard({ onNavigate, user, onSignOut }) {
             <h3>Saved Notes</h3>
             <ul className="list-block compact">
               {noteItems.map((item) => (
-                <li key={item.title}>
+                <li key={item.key || item.filename}>
                   <div>
-                    <strong>{item.title}</strong>
-                    <span>{item.preview}</span>
+                    <strong>{formatDisplayFileName(item.filename)}</strong>
+                    <span>{formatDateLabel(item.lastModified)}</span>
+                  </div>
+                  <div className="list-action-wrap">
+                    <button type="button" className="list-action-btn" onClick={() => handleOpenNote(item)}>
+                      View
+                    </button>
                   </div>
                 </li>
               ))}
+              {!loadingMeta && noteItems.length === 0 ? <li>No notes found.</li> : null}
             </ul>
           </section>
         </aside>
@@ -279,6 +471,36 @@ function Dashboard({ onNavigate, user, onSignOut }) {
             </div>
             {copyStatus ? <p className="copy-status">{copyStatus}</p> : null}
             <p className="hint-text">To join, paste the meeting ID into the box and click Join Meeting.</p>
+          </div>
+        </section>
+      ) : null}
+
+      {previewState.open ? (
+        <section className="modal-backdrop" role="dialog" aria-modal="true" aria-label={previewState.title}>
+          <div className="modal-card preview-modal-card">
+            <h3>{previewState.title}</h3>
+            {previewState.fileName ? (
+              <p className="preview-file-label">{formatDisplayFileName(previewState.fileName)}</p>
+            ) : null}
+
+            {previewState.loading ? <p>Loading preview...</p> : null}
+            {!previewState.loading && previewState.error ? <p className="api-error">{previewState.error}</p> : null}
+
+            {!previewState.loading && !previewState.error && previewState.type === 'recording' ? (
+              <div className="preview-media-wrap">
+                <video controls preload="metadata" src={previewState.videoUrl} className="preview-video" />
+              </div>
+            ) : null}
+
+            {!previewState.loading && !previewState.error && previewState.type === 'note' ? (
+              <pre className="preview-note-text">{previewState.noteText}</pre>
+            ) : null}
+
+            <div className="modal-actions">
+              <button type="button" className="secondary" onClick={closePreview}>
+                Close
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
