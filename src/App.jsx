@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import ChatWidget from './components/ChatWidget'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import MeetingRoom from './pages/MeetingRoom'
@@ -51,43 +52,42 @@ function App() {
     window.location.href = logoutUrl
   }
 
+  let page = <Login onLogin={signInWithCognito} disabled={!hasCognitoConfig} />
+
   if (isLoading) {
-    return (
+    page = (
       <main className="auth-page">
         <section className="auth-card">
           <p>Loading...</p>
         </section>
       </main>
     )
-  }
-
-  if (error) {
-    return (
+  } else if (error) {
+    page = (
       <main className="auth-page">
         <section className="auth-card">
           <h1>Authentication Error</h1>
           <p>{error.message}</p>
           <button type="button" className="google-btn" onClick={signInWithCognito}>
-            Login with Cognito
+            Get Started to MeetLite
           </button>
         </section>
       </main>
     )
+  } else if (!isAuthenticated && isProtectedRoute) {
+    page = <Login onLogin={signInWithCognito} disabled={!hasCognitoConfig} />
+  } else if (path.startsWith('/meeting/')) {
+    page = <MeetingRoom onNavigate={navigate} roomPath={path} user={user} />
+  } else if (path === '/dashboard') {
+    page = <Dashboard onNavigate={navigate} user={user} onSignOut={signOut} />
   }
 
-  if (!isAuthenticated && isProtectedRoute) {
-    return <Login onLogin={signInWithCognito} disabled={!hasCognitoConfig} />
-  }
-
-  if (path.startsWith('/meeting/')) {
-    return <MeetingRoom onNavigate={navigate} roomPath={path} user={user} />
-  }
-
-  if (path === '/dashboard') {
-    return <Dashboard onNavigate={navigate} user={user} onSignOut={signOut} />
-  }
-
-  return <Login onLogin={signInWithCognito} disabled={!hasCognitoConfig} />
+  return (
+    <>
+      {page}
+      <ChatWidget isAuthenticated={isAuthenticated} onNavigate={navigate} isMeetingPage={path.startsWith('/meeting/')} />
+    </>
+  )
 }
 
 export default App

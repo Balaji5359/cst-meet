@@ -11,6 +11,7 @@ const initialControls = {
   mute: false,
   record: false,
   notes: false,
+  screenshare: false,
   theme: false,
 }
 
@@ -40,16 +41,23 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const [hostUserId, setHostUserId] = useState('')
   const [participants, setParticipants] = useState([])
   const [localStream, setLocalStream] = useState(null)
+  const [isScreenSharing, setIsScreenSharing] = useState(false)
+  const [canScrollTop, setCanScrollTop] = useState(false)
+  const [canScrollBottom, setCanScrollBottom] = useState(false)
+  const [participantsScroll, setParticipantsScroll] = useState({ canPrev: false, canNext: false })
 
   const wsRef = useRef(null)
   const wsReadyRef = useRef(false)
   const peerConnectionsRef = useRef({})
   const localStreamRef = useRef(null)
+  const cameraStreamRef = useRef(null)
+  const screenStreamRef = useRef(null)
   const pendingIceCandidatesRef = useRef({})
   const pendingSignalsRef = useRef([])
   const reconnectTimersRef = useRef({})
   const wsReconnectTimerRef = useRef(null)
   const isLeavingRef = useRef(false)
+  const participantsScrollRef = useRef(null)
 
   const roomName = useMemo(() => roomPath.split('/').at(-1) || '', [roomPath])
   const selfName = user?.name || user?.email || 'You'
@@ -65,6 +73,23 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     document.documentElement.setAttribute('data-theme', theme)
     return () => document.documentElement.setAttribute('data-theme', 'light')
   }, [theme])
+
+  useEffect(() => {
+    const onScroll = () => {
+      const top = window.scrollY
+      const maxScroll = document.documentElement.scrollHeight - window.innerHeight
+      setCanScrollTop(top > 120)
+      setCanScrollBottom(maxScroll - top > 120)
+    }
+
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [])
 
   const addOrUpdateParticipant = (nextParticipant) => {
     const key = safeId(nextParticipant.email || nextParticipant.id)
@@ -137,6 +162,20 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     socket.send(JSON.stringify(payload))
   }
 
+  const sendParticipantState = (nextControls) => {
+    sendSignal({
+      action: 'signal',
+      type: 'state',
+      meetingId: roomName,
+      from: selfEmail,
+      payload: {
+        mute: !!nextControls.mute,
+        camera: !!nextControls.camera,
+        record: !!nextControls.record,
+      },
+    })
+  }
+
   const flushPendingIceCandidates = async (remoteKey, pc) => {
     const queued = pendingIceCandidatesRef.current[remoteKey] || []
     if (!queued.length) return
@@ -158,6 +197,82 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       pendingIceCandidatesRef.current[remoteKey] = []
     }
     pendingIceCandidatesRef.current[remoteKey].push(candidate)
+  }
+
+  const replaceOutgoingVideoTrack = async (newTrack) => {
+    const peerConnections = Object.values(peerConnectionsRef.current)
+
+    for (const pc of peerConnections) {
+      const sender = pc
+        .getSenders()
+        .find((currentSender) => currentSender.track && currentSender.track.kind === 'video')
+
+      if (sender) {
+        // eslint-disable-next-line no-await-in-loop
+        await sender.replaceTrack(newTrack)
+      }
+    }
+  }
+
+  const stopScreenShare = async () => {
+    if (!isScreenSharing) return
+
+    const displayStream = screenStreamRef.current
+    if (displayStream) {
+      displayStream.getTracks().forEach((track) => track.stop())
+    }
+    screenStreamRef.current = null
+
+    const cameraStream = cameraStreamRef.current
+    const cameraTrack = cameraStream?.getVideoTracks()?.[0] || null
+
+    if (cameraTrack) {
+      cameraTrack.enabled = controls.camera
+      try {
+        await replaceOutgoingVideoTrack(cameraTrack)
+      } catch (error) {
+        console.error('[WebRTC] Failed to restore camera track', error)
+      }
+
+      localStreamRef.current = cameraStream
+      setLocalStream(cameraStream)
+    }
+
+    setIsScreenSharing(false)
+    setControls((prev) => ({ ...prev, screenshare: false }))
+  }
+
+  const startScreenShare = async () => {
+    if (!cameraStreamRef.current) {
+      setStatusError('Camera stream is not ready yet.')
+      return
+    }
+
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+      const displayTrack = displayStream.getVideoTracks()[0]
+      if (!displayTrack) return
+
+      displayTrack.onended = () => {
+        stopScreenShare().catch(() => {})
+      }
+
+      await replaceOutgoingVideoTrack(displayTrack)
+
+      const previewTracks = [displayTrack]
+      const audioTrack = cameraStreamRef.current.getAudioTracks()[0]
+      if (audioTrack) previewTracks.push(audioTrack)
+
+      const previewStream = new MediaStream(previewTracks)
+      localStreamRef.current = previewStream
+      setLocalStream(previewStream)
+      screenStreamRef.current = displayStream
+      setIsScreenSharing(true)
+      setControls((prev) => ({ ...prev, screenshare: true }))
+      setStatusError('')
+    } catch {
+      setStatusError('Screen share was cancelled or blocked.')
+    }
   }
 
   const sendOfferTo = async (targetEmail) => {
@@ -221,8 +336,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     pc.onicecandidate = (event) => {
       if (!event.candidate) return
 
-      console.log('[WebRTC] Sending ICE candidate to', remoteEmail)
-
       sendSignal({
         action: 'signal',
         type: 'ice',
@@ -236,8 +349,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     pc.ontrack = (event) => {
       const [remoteStream] = event.streams
       if (!remoteStream) return
-
-      console.log('[WebRTC] Remote track received from', remoteEmail)
 
       addOrUpdateParticipant({
         id: remoteEmail,
@@ -277,7 +388,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       }
 
       if (pc.connectionState === 'failed') {
-        console.log('[WebRTC] Connection state failed for', remoteEmail)
         schedulePeerReconnect(800)
         return
       }
@@ -290,7 +400,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === 'failed') {
-        console.log('[WebRTC] ICE state failed for', remoteEmail)
         schedulePeerReconnect(600)
       }
     }
@@ -308,7 +417,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
 
     const type = (message?.type || '').toLowerCase()
-    if (!['offer', 'answer', 'ice'].includes(type)) return
+    if (!['offer', 'answer', 'ice', 'state'].includes(type)) return
 
     const fromEmail = (message.from || message.fromEmail || '').trim()
     const toEmail = (message.to || message.toEmail || '').trim()
@@ -330,14 +439,11 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
           await pc.setLocalDescription({ type: 'rollback' })
         }
 
-        console.log('[WebRTC] Received offer from', fromEmail)
         await pc.setRemoteDescription(new RTCSessionDescription(offer))
         await flushPendingIceCandidates(remoteKey, pc)
 
         const answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
-
-        console.log('[WebRTC] Sending answer to', fromEmail)
 
         sendSignal({
           action: 'signal',
@@ -368,7 +474,6 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         const answer = message.payload || message.data || message.answer
         if (!answer) return
 
-        console.log('[WebRTC] Received answer from', fromEmail)
         await pc.setRemoteDescription(new RTCSessionDescription(answer))
         await flushPendingIceCandidates(remoteKey, pc)
       }
@@ -383,8 +488,24 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
           return
         }
 
-        console.log('[WebRTC] Received ICE from', fromEmail)
         await pc.addIceCandidate(new RTCIceCandidate(candidate))
+      }
+
+      if (type === 'state') {
+        const next = message.payload || message.data || {}
+
+        setParticipants((prev) =>
+          prev.map((item) => {
+            const currentKey = safeId(item.email || item.id)
+            if (currentKey !== remoteKey) return item
+            return {
+              ...item,
+              isMuted: !!next.mute,
+              cameraOn: next.camera !== false,
+              isRecording: !!next.record,
+            }
+          }),
+        )
       }
     } catch (error) {
       console.error('[WebRTC] Negotiation error', error)
@@ -402,16 +523,15 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         return
       }
 
-      console.log('[WebSocket] Connecting:', wsUrl)
       const socket = new WebSocket(wsUrl)
       wsRef.current = socket
       wsReadyRef.current = false
 
       socket.onopen = () => {
-        console.log('[WebSocket] Connected')
         wsReadyRef.current = true
         setStatusError('')
         flushPendingSignals()
+        sendParticipantState(controls)
       }
 
       socket.onmessage = handleSignalMessage
@@ -445,6 +565,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
           return
         }
 
+        cameraStreamRef.current = stream
         localStreamRef.current = stream
         setLocalStream(stream)
         setMediaBlocked(false)
@@ -478,9 +599,16 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       Object.keys(peerConnectionsRef.current).forEach((key) => clearPeerConnection(key))
       peerConnectionsRef.current = {}
 
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((track) => track.stop())
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((track) => track.stop())
       }
+      screenStreamRef.current = null
+
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((track) => track.stop())
+      }
+      cameraStreamRef.current = null
+
       localStreamRef.current = null
       pendingIceCandidatesRef.current = {}
       pendingSignalsRef.current = []
@@ -488,6 +616,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       reconnectTimersRef.current = {}
       setLocalStream(null)
       setParticipants([])
+      setIsScreenSharing(false)
     }
   }, [roomName, selfEmail, mediaRetryTick])
 
@@ -567,7 +696,24 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
   }, [roomName, onNavigate, selfEmailKey])
 
+  const handleScreenShareToggle = async () => {
+    if (isScreenSharing) {
+      await stopScreenShare()
+      return
+    }
+
+    await startScreenShare()
+  }
+
   const handleToggle = (key) => {
+    if (key === 'screenshare') {
+      handleScreenShareToggle().catch((error) => {
+        console.error('[WebRTC] Screen share toggle failed', error)
+        setStatusError('Unable to toggle screen share.')
+      })
+      return
+    }
+
     setControls((prev) => {
       const next = { ...prev, [key]: !prev[key] }
 
@@ -575,16 +721,20 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         setTheme(next.theme ? 'dark' : 'light')
       }
 
-      if (key === 'mute' && localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach((track) => {
+      if (key === 'mute' && cameraStreamRef.current) {
+        cameraStreamRef.current.getAudioTracks().forEach((track) => {
           track.enabled = !next.mute
         })
       }
 
-      if (key === 'camera' && localStreamRef.current) {
-        localStreamRef.current.getVideoTracks().forEach((track) => {
+      if (key === 'camera' && cameraStreamRef.current) {
+        cameraStreamRef.current.getVideoTracks().forEach((track) => {
           track.enabled = next.camera
         })
+      }
+
+      if (key === 'mute' || key === 'camera' || key === 'record') {
+        sendParticipantState(next)
       }
 
       return next
@@ -598,12 +748,16 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     setIsLeaving(true)
     isLeavingRef.current = true
 
+    await stopScreenShare()
+
     Object.keys(peerConnectionsRef.current).forEach((key) => clearPeerConnection(key))
     peerConnectionsRef.current = {}
 
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop())
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop())
     }
+    cameraStreamRef.current = null
+
     localStreamRef.current = null
     setLocalStream(null)
 
@@ -623,11 +777,74 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     onNavigate('/dashboard')
   }
 
-
   const handleEnableMedia = () => {
     setStatusError('')
     setMediaRetryTick((value) => value + 1)
   }
+
+  const handleScrollTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handleScrollBottom = () => {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
+  }
+
+  const updateParticipantsScroll = () => {
+    const node = participantsScrollRef.current
+    if (!node) return
+
+    const horizontal = node.scrollWidth > node.clientWidth + 4
+    const next = horizontal
+      ? {
+          canPrev: node.scrollLeft > 8,
+          canNext: node.scrollLeft + node.clientWidth < node.scrollWidth - 8,
+        }
+      : {
+          canPrev: node.scrollTop > 8,
+          canNext: node.scrollTop + node.clientHeight < node.scrollHeight - 8,
+        }
+
+    setParticipantsScroll((prev) =>
+      prev.canPrev === next.canPrev && prev.canNext === next.canNext ? prev : next,
+    )
+  }
+
+  const registerParticipantsScroller = (node) => {
+    if (participantsScrollRef.current === node) return
+    participantsScrollRef.current = node
+  }
+
+  const handleParticipantsScroll = (direction) => {
+    const node = participantsScrollRef.current
+    if (!node) return
+
+    const horizontal = node.scrollWidth > node.clientWidth + 4
+    const amount = horizontal ? Math.round(node.clientWidth * 0.86) : Math.round(node.clientHeight * 0.72)
+
+    if (horizontal) {
+      node.scrollBy({ left: direction > 0 ? amount : -amount, behavior: 'smooth' })
+    } else {
+      node.scrollBy({ top: direction > 0 ? amount : -amount, behavior: 'smooth' })
+    }
+    window.setTimeout(updateParticipantsScroll, 220)
+  }
+
+  useEffect(() => {
+    const node = participantsScrollRef.current
+    if (!node) return undefined
+
+    const onScroll = () => updateParticipantsScroll()
+    node.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    onScroll()
+
+    return () => {
+      node.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [participants.length])
+
   return (
     <main className="meeting-page">
       <Header title={`Meeting: ${roomName}`} subtitle={`Status: ${meetingStatus}`} />
@@ -641,24 +858,66 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       {meetingStatus === 'EXPIRED' ? (
         <p className="api-error">Meeting expired. Redirecting to dashboard...</p>
       ) : null}
-
       <VideoGrid
         selfName={selfName}
         selfIsHost={selfIsHost}
+        selfIsScreenSharing={isScreenSharing}
+        selfIsMuted={controls.mute}
+        selfIsRecording={controls.record}
+        selfCameraOn={controls.camera}
         localStream={localStream}
         participants={participants}
+        onParticipantsContainerReady={registerParticipantsScroller}
+        participantsScroll={participantsScroll}
+        onParticipantsScroll={handleParticipantsScroll}
       />
 
-      <ControlBar
-        controls={controls}
+      <ControlBar controls={controls}
         onToggle={handleToggle}
         onLeave={handleLeaveMeeting}
         leaveLabel={isLeaving ? 'Leaving...' : 'Leave'}
       />
 
       <NotesPanel open={controls.notes} onClose={() => handleToggle('notes')} />
+
+      <div className="scroll-fabs">
+        <button
+          type="button"
+          className="scroll-fab"
+          onClick={handleScrollTop}
+          aria-label="Scroll to top"
+          disabled={!canScrollTop}
+        >
+          Top
+        </button>
+        <button
+          type="button"
+          className="scroll-fab"
+          onClick={handleScrollBottom}
+          aria-label="Scroll to bottom"
+          disabled={!canScrollBottom}
+        >
+          Down
+        </button>
+      </div>
     </main>
   )
 }
 
 export default MeetingRoom
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

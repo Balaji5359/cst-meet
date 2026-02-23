@@ -6,9 +6,9 @@ function Login({ onLogin, disabled = false }) {
           <div className="brand-logo">M</div>
           <h1>MeetLite</h1>
         </div>
-        <p>Welcome to MeetLite - secure meetings with Cognito sign-in</p>
+        <p>Welcome to MeetLite - have a great meeting experience!</p>
         <button type="button" className="google-btn" onClick={onLogin} disabled={disabled}>
-          Login with Cognito
+          Get Started to MeetLite
         </button>
       </section>
     </main>

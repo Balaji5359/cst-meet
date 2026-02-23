@@ -3,6 +3,9 @@ import { useMemo } from 'react'
 function ParticipantTile({ participant }) {
   const hasStream = !!participant.stream
   const roleLabel = participant.isHost ? 'ADMIN' : participant.role
+  const isMuted = !!participant.isMuted
+  const isRecording = !!participant.isRecording
+  const isCameraOff = participant.cameraOn === false
 
   return (
     <article className="participant-tile">
@@ -22,12 +25,26 @@ function ParticipantTile({ participant }) {
 
       <div className="video-badge">{participant.label}</div>
       {roleLabel ? <div className={`role-pill ${participant.isHost ? 'admin' : ''}`}>{roleLabel}</div> : null}
-      {!hasStream ? <span>{participant.cameraOn === false ? 'Camera Off' : 'Waiting for video...'}</span> : null}
+      {isRecording ? <div className="role-pill recording">REC</div> : null}
+      {isMuted ? <div className="mute-indicator" title="Muted">Muted</div> : null}
+      {!hasStream ? <span>{isCameraOff ? 'Camera Off' : 'Waiting for video...'}</span> : null}
     </article>
   )
 }
 
-function VideoGrid({ selfName = 'You', selfIsHost = false, localStream = null, participants = [] }) {
+function VideoGrid({
+  selfName = 'You',
+  selfIsHost = false,
+  selfIsScreenSharing = false,
+  selfIsMuted = false,
+  selfIsRecording = false,
+  selfCameraOn = true,
+  localStream = null,
+  participants = [],
+  onParticipantsContainerReady,
+  participantsScroll = { canPrev: false, canNext: false },
+  onParticipantsScroll,
+}) {
   const orderedParticipants = useMemo(
     () => [...participants].sort((a, b) => Number(b.isHost) - Number(a.isHost)),
     [participants],
@@ -36,7 +53,7 @@ function VideoGrid({ selfName = 'You', selfIsHost = false, localStream = null, p
   return (
     <section className="meeting-stage">
       <div className="main-video">
-        {localStream ? (
+        {localStream && selfCameraOn ? (
           <video
             className="main-video-element"
             ref={(node) => {
@@ -53,10 +70,19 @@ function VideoGrid({ selfName = 'You', selfIsHost = false, localStream = null, p
 
         <div className="video-badge">{selfName}</div>
         {selfIsHost ? <div className="role-pill admin">ADMIN</div> : null}
-        {!localStream ? <span>Main Video Feed</span> : null}
+        {selfIsScreenSharing ? <div className="role-pill sharing">SHARING</div> : null}
+        {selfIsRecording ? <div className="role-pill recording">REC</div> : null}
+        {selfIsMuted ? <div className="mute-indicator" title="Muted">Muted</div> : null}
+        {!localStream || !selfCameraOn ? <span>{selfCameraOn ? 'Main Video Feed' : 'Camera Off'}</span> : null}
       </div>
 
-      <div className="participant-grid">
+      <div
+        className="participant-grid"
+        aria-label="Participants"
+        ref={(node) => {
+          if (onParticipantsContainerReady) onParticipantsContainerReady(node)
+        }}
+      >
         {orderedParticipants.length === 0 ? (
           <article className="participant-tile">
             <div className="video-badge">Participants</div>
@@ -68,8 +94,32 @@ function VideoGrid({ selfName = 'You', selfIsHost = false, localStream = null, p
           ))
         )}
       </div>
+
+      {onParticipantsScroll ? (
+        <div className="participants-scroll-controls" aria-label="Participants navigation">
+          <button
+            type="button"
+            className="scroll-fab"
+            onClick={() => onParticipantsScroll(-1)}
+            disabled={!participantsScroll.canPrev}
+            aria-label="Previous participants"
+          >
+            Prev
+          </button>
+          <button
+            type="button"
+            className="scroll-fab"
+            onClick={() => onParticipantsScroll(1)}
+            disabled={!participantsScroll.canNext}
+            aria-label="Next participants"
+          >
+            Next
+          </button>
+        </div>
+      ) : null}
     </section>
   )
 }
 
 export default VideoGrid
+

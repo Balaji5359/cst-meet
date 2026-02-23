@@ -136,33 +136,29 @@ textarea {
   background: var(--brand-soft);
 }
 
-.google-icon {
-  width: 1.3rem;
-  height: 1.3rem;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  display: grid;
-  place-items: center;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
 .dashboard-page {
-  max-width: 980px;
+  max-width: 1280px;
   margin: 0 auto;
   padding-top: 1.25rem;
 }
 
-.avatar-placeholder {
-  width: 2.35rem;
-  height: 2.35rem;
-  border-radius: 50%;
-  background: var(--brand-soft);
-  border: 1px solid var(--border);
+.dashboard-layout {
   display: grid;
-  place-items: center;
-  font-weight: 700;
+  grid-template-columns: 1.55fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.dashboard-main-col,
+.dashboard-side-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.dashboard-page .dashboard-card {
+  width: 100%;
+  max-width: 100%;
 }
 
 .dashboard-card label {
@@ -196,39 +192,6 @@ textarea {
   cursor: pointer;
 }
 
-@media (max-width: 640px) {
-  .auth-page,
-  .dashboard-page,
-  .meeting-page {
-    padding: 0.8rem;
-  }
-
-  .dashboard-actions {
-    grid-template-columns: 1fr;
-  }
-}
-.auth-secondary-btn,
-.auth-link-btn {
-  width: 100%;
-  border-radius: 0.75rem;
-  padding: 0.72rem 1rem;
-  cursor: pointer;
-}
-
-.auth-secondary-btn {
-  margin-top: 0.65rem;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-}
-
-.auth-link-btn {
-  margin-top: 0.5rem;
-  border: 0;
-  background: transparent;
-  color: var(--brand);
-}
-
 .header-actions {
   display: flex;
   align-items: center;
@@ -244,36 +207,87 @@ textarea {
   cursor: pointer;
 }
 
-.user-card {
-  width: 100%;
-  max-width: 100%;
-  margin-bottom: 1rem;
-}
-
-.user-card h2 {
+.user-card h2,
+.dashboard-card h3 {
   margin: 0 0 0.6rem;
-  font-size: 1.15rem;
 }
 
 .user-card p {
   margin: 0.35rem 0;
   color: var(--text-muted);
 }
-.dashboard-page .dashboard-card {
-  width: 100%;
-  max-width: 720px;
-}
-.config-error {
-  margin: 0.6rem 0 0.9rem;
-  color: #b42318;
-  font-size: 0.9rem;
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
 }
 
-.auth-card button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  transform: none;
+.stats-grid article {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.65rem;
+  background: var(--surface-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
 }
+
+.stats-grid span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.stats-grid strong {
+  font-size: 1rem;
+}
+
+.list-block {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.list-block li {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.62rem;
+  background: var(--surface-soft);
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.list-block li div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.list-block span,
+.list-block small {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.faq-card p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.faq-list {
+  margin: 0.7rem 0 0;
+  padding-left: 1.05rem;
+  color: var(--text);
+}
+
+.faq-list li {
+  margin-bottom: 0.45rem;
+}
+
 .api-error {
   margin-top: 0.85rem;
   color: #b42318;
@@ -297,6 +311,7 @@ textarea {
   opacity: 0.65;
   cursor: not-allowed;
 }
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -364,3 +379,187 @@ textarea {
   margin-top: 0.3rem;
   font-size: 0.9rem;
 }
+
+.chat-widget {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
+.chat-widget.meeting-offset {
+  bottom: 7.2rem;
+}
+
+.chat-fab {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.7rem 1rem;
+  background: var(--brand);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: var(--panel-shadow);
+}
+
+.chat-panel {
+  width: min(92vw, 360px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+}
+
+.chat-panel-header {
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.chat-panel-header button,
+.chat-input-row button,
+.chat-quick-actions button,
+.chat-login-hint {
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text);
+  border-radius: 0.55rem;
+  cursor: pointer;
+}
+
+.chat-messages {
+  max-height: 260px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+
+.chat-msg {
+  border-radius: 0.65rem;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.88rem;
+}
+
+.chat-msg.assistant {
+  background: var(--surface-soft);
+}
+
+.chat-msg.user {
+  background: var(--brand-soft);
+  align-self: flex-end;
+}
+
+.chat-quick-actions {
+  padding: 0 0.75rem 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.chat-quick-actions button {
+  padding: 0.3rem 0.45rem;
+  font-size: 0.75rem;
+}
+
+.chat-input-row {
+  border-top: 1px solid var(--border);
+  padding: 0.65rem;
+  display: flex;
+  gap: 0.45rem;
+}
+
+.chat-input-row input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--surface-soft);
+  color: var(--text);
+  padding: 0.45rem 0.55rem;
+}
+
+.chat-input-row button {
+  padding: 0.42rem 0.7rem;
+}
+
+.chat-login-hint {
+  margin: 0 0.65rem 0.65rem;
+  width: calc(100% - 1.3rem);
+  padding: 0.42rem;
+}
+
+@media (max-width: 980px) {
+  .dashboard-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .auth-page,
+  .dashboard-page,
+  .meeting-page {
+    padding: 0.8rem;
+  }
+
+  .dashboard-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-widget {
+    right: 0.65rem;
+    bottom: 0.65rem;
+  }
+
+  .chat-widget.meeting-offset {
+    bottom: 9.7rem;
+  }
+}
+
+body.chat-open {
+  overflow: hidden;
+}
+
+
+.ask-ai-btn {
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, var(--brand) 0%, #5f8bff 100%);
+  color: #fff;
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.2s ease;
+}
+
+.ask-ai-btn:hover {
+  transform: translateY(-1px);
+}
+
+.ask-ai-btn:active {
+  transform: translateY(0);
+}
+
+
+.chat-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chat-panel-header-actions button {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
