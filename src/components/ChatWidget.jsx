@@ -10,6 +10,18 @@ const quickQuestions = [
   'How do I use notes in a meeting?',
 ]
 
+const highlightKeywords = [
+  'Create Meeting',
+  'Join Meeting',
+  'Meeting ID',
+  'Dashboard',
+  'Camera',
+  'Mute',
+  'Notes',
+  'Record',
+  'WebRTC',
+]
+
 const initialMessages = [
   {
     id: 'welcome',
@@ -24,12 +36,120 @@ function fallbackReply(input, isAuthenticated) {
   if (!isAuthenticated) return 'Please sign in first. Then open Dashboard to create or join a meeting.'
   if (text.includes('create')) return 'Dashboard -> Create Meeting. Copy generated meeting ID and share with others.'
   if (text.includes('join')) return 'Dashboard -> Enter meeting ID -> Join Meeting. Allow camera/microphone permissions.'
-  if (text.includes('waiting') || text.includes('video')) return 'Check network stability and ensure all users joined same meeting ID. Rejoin once if needed.'
+  if (text.includes('waiting') || text.includes('video')) {
+    return 'Check network stability and ensure all users joined same meeting ID. Rejoin once if needed.'
+  }
   if (text.includes('mute') || text.includes('camera')) return 'Mute toggles microphone. Camera toggles video stream visibility.'
   if (text.includes('note')) return 'Use Notes button in meeting room to open notes panel and save notes.'
   if (text.includes('record')) return 'Record is currently UI state; backend recording storage API will be integrated later.'
 
   return 'I can help with login, create/join meeting, controls, and common troubleshooting.'
+}
+
+function normalizeLine(line) {
+  return (line || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+function sanitizeAiReply(rawReply) {
+  const text = typeof rawReply === 'string' ? rawReply : String(rawReply || '')
+  if (!text.trim()) return ''
+
+  const blockedNormalized = new Set(
+    ['links too', ...quickQuestions].map((line) => normalizeLine(line)),
+  )
+
+  const stripped = text
+    .replace(/<sources>[\s\S]*$/gi, '')
+    .replace(/<source>[\s\S]*$/gi, '')
+    .replace(/\bHow do I create and share a meeting\?/gi, '')
+    .replace(/\bHow do I join using meeting ID\?/gi, '')
+    .replace(/\bWhy does it show waiting for video\?/gi, '')
+    .replace(/\bHow do Camera and Mute buttons work\?/gi, '')
+    .replace(/\bHow do I use notes in a meeting\?/gi, '')
+
+  const splitInlineNumbering = stripped.replace(/\s(\d+\.)\s/g, '\n$1 ')
+
+  const cleanedLines = splitInlineNumbering
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !blockedNormalized.has(normalizeLine(line)))
+
+  return cleanedLines.join('\n').trim()
+}
+
+function parseAssistantReply(text) {
+  const lines = (text || '').split('\n').map((line) => line.trim()).filter(Boolean)
+  const ordered = []
+  const bullets = []
+  const paragraphs = []
+
+  lines.forEach((line) => {
+    if (/^\d+\.\s+/.test(line)) {
+      ordered.push(line.replace(/^\d+\.\s+/, '').trim())
+      return
+    }
+    if (/^[-*]\s+/.test(line)) {
+      bullets.push(line.replace(/^[-*]\s+/, '').trim())
+      return
+    }
+    paragraphs.push(line)
+  })
+
+  return { ordered, bullets, paragraphs }
+}
+
+function renderHighlightedText(text) {
+  if (!text) return null
+  const escaped = highlightKeywords
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|')
+  if (!escaped) return text
+
+  const regex = new RegExp(`(${escaped})`, 'gi')
+  const parts = text.split(regex)
+
+  return parts.map((part, index) => {
+    const isKeyword = highlightKeywords.some((keyword) => keyword.toLowerCase() === part.toLowerCase())
+    if (isKeyword) {
+      return (
+        <strong key={`${part}-${index}`} className="chat-keyword">
+          {part}
+        </strong>
+      )
+    }
+    return <span key={`${part}-${index}`}>{part}</span>
+  })
+}
+
+function AssistantMessage({ text }) {
+  const { ordered, bullets, paragraphs } = parseAssistantReply(text)
+
+  return (
+    <div className="chat-rich-msg">
+      {paragraphs.map((line, index) => (
+        <p key={`p-${index}`}>{renderHighlightedText(line)}</p>
+      ))}
+
+      {ordered.length > 0 ? (
+        <ol>
+          {ordered.map((item, index) => (
+            <li key={`o-${index}`}>{renderHighlightedText(item)}</li>
+          ))}
+        </ol>
+      ) : null}
+
+      {bullets.length > 0 ? (
+        <ul>
+          {bullets.map((item, index) => (
+            <li key={`b-${index}`}>{renderHighlightedText(item)}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
 }
 
 function ChatWidget({ isAuthenticated = false, onNavigate, isMeetingPage = false }) {
@@ -86,7 +206,9 @@ function ChatWidget({ isAuthenticated = false, onNavigate, isMeetingPage = false
         const nextSession = parsedBody?.sessionId || outer?.sessionId
 
         if (nextSession) setSessionId(nextSession)
-        return reply || fallbackReply(text, isAuthenticated)
+
+        const cleanReply = sanitizeAiReply(reply)
+        return cleanReply || fallbackReply(text, isAuthenticated)
       } catch {
         return fallbackReply(text, isAuthenticated)
       }
@@ -95,13 +217,11 @@ function ChatWidget({ isAuthenticated = false, onNavigate, isMeetingPage = false
   )
 
   const sendMessage = useCallback(
-    async (text, options = { includeUser: true, hideQuickActions: false }) => {
+    async (text, options = { includeUser: true }) => {
       const clean = text.trim()
       if (!clean || isLoading) return
 
-      if (options.hideQuickActions) {
-        setShowQuickActions(false)
-      }
+      setShowQuickActions(false)
 
       if (options.includeUser) {
         const userMessage = { id: `u-${Date.now()}`, role: 'user', text: clean }
@@ -124,7 +244,7 @@ function ChatWidget({ isAuthenticated = false, onNavigate, isMeetingPage = false
   )
 
   const onQuickAsk = (question) => {
-    sendMessage(question, { includeUser: false, hideQuickActions: true })
+    sendMessage(question, { includeUser: false })
   }
 
   useEffect(() => {
@@ -132,7 +252,7 @@ function ChatWidget({ isAuthenticated = false, onNavigate, isMeetingPage = false
       const question = (event?.detail?.question || '').trim()
       if (!question) return
       setOpen(true)
-      sendMessage(question, { includeUser: false, hideQuickActions: true })
+      sendMessage(question, { includeUser: false })
     }
 
     window.addEventListener('meetlite-ai-ask', onAsk)
@@ -167,7 +287,7 @@ function ChatWidget({ isAuthenticated = false, onNavigate, isMeetingPage = false
           <div className="chat-messages">
             {messages.map((message) => (
               <div key={message.id} className={`chat-msg ${message.role}`}>
-                {message.text}
+                {message.role === 'assistant' ? <AssistantMessage text={message.text} /> : message.text}
               </div>
             ))}
             {isLoading ? <div className="chat-msg assistant">Thinking...</div> : null}
@@ -192,15 +312,11 @@ function ChatWidget({ isAuthenticated = false, onNavigate, isMeetingPage = false
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
                   event.preventDefault()
-                  sendMessage(input, { includeUser: true, hideQuickActions: false })
+                  sendMessage(input, { includeUser: true })
                 }
               }}
             />
-            <button
-              type="button"
-              onClick={() => sendMessage(input, { includeUser: true, hideQuickActions: false })}
-              disabled={isLoading}
-            >
+            <button type="button" onClick={() => sendMessage(input, { includeUser: true })} disabled={isLoading}>
               Send
             </button>
           </div>

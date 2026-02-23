@@ -1,304 +1,164 @@
-# CST Meet – Day 1 Deployment
+# CST Meet - Deployment and Feature Progress
 
 ## Project Overview
-**CST Meet** is a web-based meeting and collaboration platform designed for students and academic use.  
-This repository contains the frontend application and its **production deployment on AWS infrastructure**.
+CST Meet (MeetLite) is a web-based real-time meeting platform with Cognito authentication, meeting lifecycle APIs, WebSocket signaling, WebRTC media, and a responsive React UI.
 
 ---
 
-## Tech Stack (Day 1)
-- **Frontend**: Vite + HTML, CSS, JavaScript
-- **Web Server**: NGINX
-- **Cloud**: AWS EC2 (Ubuntu)
-- **Domain & SSL**: Custom domain with HTTPS (Certbot)
-- **Version Control**: Git & GitHub
+## Day 1 - Initial Deployment
+
+### Scope Completed
+- Built and deployed frontend app
+- Hosted using NGINX on EC2
+- Configured domain and HTTPS
+
+### Stack
+- Frontend: Vite + React
+- Web Server: NGINX
+- Infra: AWS EC2
+- Domain/SSL: Route + Certbot style SSL setup
+
+### Architecture
+User Browser -> Custom Domain (HTTPS) -> NGINX -> Vite `dist/`
 
 ---
 
-## Infrastructure Setup
-- **EC2 Instance**: Ubuntu Server
-- **Static Public IP**: Elastic IP
-- **Domain**: https://cstmeet.skillrouteai.com
-- **Web Server**: NGINX (configured using server blocks)
-- **SSL Certificate**: configured Encrypt 
+## Day 2 - Cloud-Native Migration and CI/CD
+
+### Scope Completed
+- Dockerized frontend
+- Migrated hosting from EC2 to ECS Fargate
+- Added ALB + ACM HTTPS
+- Enabled GitHub Actions CI/CD
+
+### Deployment Flow
+Developer -> GitHub -> GitHub Actions -> Amazon ECR -> ECS Fargate -> ALB (HTTPS) -> Route53 Domain
+
+### Production Domain
+- https://cstmeet2.skillrouteai.com
 
 ---
 
-## Deployment Architecture
-text
-User Browser
-     |
-     v
-Custom Domain (HTTPS)
-     |
-     v
-NGINX (Static Hosting & Reverse Proxy)
-     |
-     v
-Vite Production Build (dist/)
+## Day 3 - Realtime Meeting Core
 
+### Scope Completed
+- Cognito login (Google + Email)
+- Meeting REST APIs with Lambda + DynamoDB
+- WebSocket signaling API with Lambda
+- Initial WebRTC integration for live media
 
+### Core AWS Services
+- Cognito User Pool
+- API Gateway (REST + WebSocket)
+- Lambda (Python)
+- DynamoDB (Meetings, Participants, connection mapping)
+- ECS Fargate (frontend)
 
-
----
-
-## Day 2 – Cloud-Native Architecture & CI/CD (Production Grade)
-
-### Goals Achieved
-- Dockerized frontend application
-- Migrated from EC2 to ECS (Fargate)
-- Enabled HTTPS via ALB + ACM
-- Implemented full CI/CD pipeline
-- Automatic deployment on every GitHub push
+### REST APIs (Day 3)
+- `POST /meeting/create`
+- `POST /meeting/join`
+- `POST /meeting/leave` (plus fallback handling)
+- `POST /meeting/getid`
+- `POST /meetlite-ai-api`
 
 ---
 
-### Containerization
-- Created Dockerfile with multi-stage build
-- NGINX used as production web server
-- Docker image built and tested locally
-- Image pushed to **Amazon ECR (private repository)**
+## Day 4 - UX Stabilization, AI Chat Polish, User Data APIs
+
+### Scope Completed Today
+- Stabilized dashboard metadata panels
+- Added user recordings and notes listing UI
+- Added recording preview modal (video player)
+- Added note preview modal (text viewer)
+- Added response cleanup and formatting for MeetLite AI chatbot:
+  - Renders assistant answers in readable paragraph/list form
+  - Highlights key terms for better readability
+  - Quick FAQ buttons after first user interaction
+---
+
+## API Section (Updated with User Data API)
+
+### Base URL
+- `https://######.execute-api.ap-south-1.amazonaws.com/dev`
+
+### Meeting APIs
+- `POST /meeting/create`
+- `POST /meeting/join`
+- `POST /meeting/leave`
+- `POST /meeting/getid`
+
+### AI API
+- `POST /meetlite-ai-api`
+
+### User Data API
+- `POST /meetlite-user-data`
+- Request wrapper used by frontend:
+```json
+{
+  "body": "{\"email\":\"user@example.com\",\"task\":\"getmeetings\"}"
+}
+```
+
+### User Data Tasks Implemented
+1. `getmeetings`
+- Returns user meeting history and metadata (status, duration, timestamps)
+
+2. `saverecording`
+- Saves recording content to S3 under user folder
+
+3. `getrecording`
+- Lists user recordings from S3
+
+4. `getrecordingpreview`
+- Returns short-lived signed URL for video preview in UI
+
+5. `savenote`
+- Saves note text as `.txt` in S3
+
+6. `getnotes`
+- Lists saved notes from S3
+
+7. `getnotepreview`
+- Returns note text content for popup preview
 
 ---
 
-### AWS ECS Deployment
-- ECS Cluster: `meetlite-ui`
-- Task Definition: `meetlite-task`
-- Service: `meetlite-service`
-- Launch Type: **Fargate**
-- Desired Tasks: 1
-- Networking:
-  - Public subnets
-  - Auto-assigned public IP
+## Data Stores
+
+### DynamoDB
+- `Meetings`
+- `Participants`
+- `MeetliteConnections` (WebSocket connections)
+
+### S3
+- Bucket: `fields-related-data-of-myapp`
+- Prefix: `meetlite-user-data/`
+- Recordings: `meetlite-user-recordings/<email>/...`
+- Notes: `meetlite-user-notes/<email>/...`
 
 ---
 
-### Load Balancer & HTTPS
-- Application Load Balancer (internet-facing)
-- HTTPS Listener (443)
-- SSL Certificate from AWS ACM
-- Target Group:
-  - Type: IP
-  - Port: 80
-  - Health Check: `/`
-
----
-
-### Custom Domain
-- Route 53 Alias record → ALB
-- Secure domain: https://cstmeet2.skillrouteai.com
----
-
-### CI/CD Pipeline (GitHub Actions)
-
-A fully automated CI/CD pipeline was implemented.
-
-#### Workflow Trigger
-- On every push to `main` branch
-
-#### CI/CD Steps
-1. Checkout source code
-2. Configure AWS credentials securely using GitHub Secrets
-3. Build Docker image
-4. Push image to Amazon ECR
-5. Force new ECS service deployment
-6. Application updates live automatically
-
-#### Result
-- Any UI change committed to GitHub is deployed live within minutes 🚀
-
----
-
-## Security Best Practices
-- No secrets committed to repository
-- AWS credentials stored in GitHub Secrets
-- HTTPS enforced using ACM
-- Private ECR repository
-
----
-
-## Final Production Architecture
-
-Developer (VS Code)
-↓
-GitHub Repository
-↓
-GitHub Actions (CI/CD)
-↓
-Amazon ECR
-↓
-Amazon ECS (Fargate)
-↓
-Application Load Balancer (HTTPS)
-↓
-Custom Domain (Route 53)
-↓
-User Browser
-
-
-# CST Meet – Day 3 Media Scaling & Production Readiness
-
-## Project Overview
-Day 3 focused on extending **CST Meet** into a **real-time video meeting platform** by integrating authentication, backend APIs, WebSocket-based signaling, and WebRTC media streaming using AWS serverless architecture.
-
----
-
-## Tech Stack (Day 3)
-- **Frontend**: Vite + React + WebRTC
-- **Authentication**: Amazon Cognito (Google + Email)
-- **Backend**: AWS Lambda (Python)
-- **Database**: Amazon DynamoDB
-- **APIs**:
-  - REST API Gateway (meeting lifecycle)
-  - WebSocket API Gateway (real-time signaling)
-- **Deployment**: AWS ECS (Fargate)
-- **Security**: IAM, HTTPS (ALB + ACM)
-
----
-
-## Authentication & User Management
-- Implemented **Amazon Cognito User Pool**
-- Enabled:
-  - Google OAuth
-  - Email & Password login
-- Used Cognito Hosted UI
-- OAuth 2.0 Authorization Code Flow
-- Extracted user identity from ID token
-- Stored authenticated user details in DynamoDB
-
----
-
-## Backend Architecture
-- Fully **serverless backend**
-- Business logic handled via AWS Lambda
-- Data persistence using DynamoDB
-- API Gateway used for:
-  - REST APIs
-  - WebSocket signaling
-
----
-
-## DynamoDB Tables
-- **MeetLiteUsers**
-  - userId
-  - email
-  - name
-  - signup_method
-  - created_at
-
-- **Meetings**
-  - meetingId
-  - hostUserId
-  - createdAt
-  - expiresAt
-  - status (ACTIVE / EXPIRED)
-
-- **Participants**
-  - meetingId
-  - userEmail
-  - role (ADMIN / PARTICIPANT)
-  - joinedAt
-
-- **WebSocketConnections**
-  - connectionId
-  - meetingId
-  - userEmail
-  - connectedAt
-
----
-
-## REST APIs Implemented
-- **Create Meeting**
-  - Generates meeting ID
-  - Assigns host as ADMIN
-  - Stores meeting metadata
-
-- **Join Meeting**
-  - Validates meeting status
-  - Adds participant
-  - Prevents duplicate joins
-
-- **Leave Meeting**
-  - Handles participant exit
-  - Updates meeting status if expired
-
-- **Get Meeting Status**
-  - Returns meeting status
-  - Returns host details
-  - Returns normalized participant list
-
-- **MeetLite-AI-API**
-  - API to connect to Bedrock Agent(KB)
-  - To handle user queries
----
-
-## Real-Time Signaling (WebSocket)
-- Created **API Gateway WebSocket API**
-- Route selection expression:
-  - `$request.body.action`
-
-### WebSocket Routes
-- `$connect`
-- `$disconnect`
-- `$default`
-
-### WebSocket Lambda Functions
-- **meetlite-ws-connect**
-  - Registers WebSocket connection
-  - Maps user to meeting
-
-- **meetlite-ws-message**
-  - Relays WebRTC signaling messages
-  - Handles offer, answer, ICE candidates
-
-- **meetlite-ws-disconnect**
-  - Cleans up disconnected users
-
----
-
-## WebRTC Media Integration
-- Enabled camera & microphone using `getUserMedia`
-- Implemented peer-to-peer media streaming
-- Used `RTCPeerConnection`
-- Integrated:
-  - Offer / Answer exchange
-  - ICE candidate handling
-- Media flows directly between browsers (P2P)
-
----
-
-## UI Enhancements
-- Dashboard → Create / Join meeting
-- Meeting Room UI
-- Video grid layout
-- ADMIN badge for host
-- Participant role handling
-- Leave meeting confirmation
-- Mute / Camera toggle controls
-- Duplicate participant prevention
-
----
-
-## Deployment & Testing
-- Frontend deployed via **ECS Fargate**
-- Backend deployed via **AWS Lambda**
-- Tested with:
-  - Multiple Google accounts
-  - Multiple browsers
-  - Multiple devices
-- Verified:
-  - Authentication flow
-  - Meeting lifecycle
-  - WebSocket connections
-  - Local video rendering
+## IAM Notes (User Data Lambda)
+Required permissions for `/meetlite-user-data` Lambda role:
+- DynamoDB: `GetItem`, `Scan` on `Meetings`, `Participants`
+- S3: `ListBucket`, `GetObject`, `PutObject` on `fields-related-data-of-myapp` and `meetlite-user-data/*`
+- CloudWatch Logs: standard create/write permissions
 
 ---
 
 ## Current Status
-- Authentication:  Completed
-- Backend APIs:  Stable
-- WebSocket signaling:  Integrated
-- WebRTC media:  In progress (ICE/TURN optimization)
-- Production readiness:  Ongoing
+- Auth: Stable
+- Meeting lifecycle APIs: Stable
+- WebSocket signaling: Stable
+- WebRTC media: Working, network-dependent edge cases under observation
+- Dashboard metadata + preview UX: Completed (Day 4)
+- AI chatbot response formatting: Completed (Day 4)
 
 ---
+
+## Important Deployment Note
+If UI shows:
+- `Unsupported task: getrecordingpreview`
+- `Unsupported task: getnotepreview`
+
+Then API Gateway is still using an old Lambda deployment. Re-deploy Lambda code and re-deploy API stage.

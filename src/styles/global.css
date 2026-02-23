@@ -621,3 +621,32 @@ body.chat-open {
   word-break: break-word;
   color: var(--text);
 }
+
+.chat-msg {
+  white-space: normal;
+}
+
+.chat-rich-msg p {
+  margin: 0 0 0.45rem;
+  line-height: 1.35;
+}
+
+.chat-rich-msg p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-rich-msg ol,
+.chat-rich-msg ul {
+  margin: 0.35rem 0 0.35rem 1rem;
+  padding-left: 0.75rem;
+}
+
+.chat-rich-msg li {
+  margin-bottom: 0.35rem;
+  line-height: 1.35;
+}
+
+.chat-keyword {
+  color: var(--brand);
+  font-weight: 700;
+}
