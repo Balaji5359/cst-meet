@@ -42,7 +42,7 @@ Vite Production Build (dist/)
 
 ---
 
-## 📅 Day 2 – Cloud-Native Architecture & CI/CD (Production Grade)
+## Day 2 – Cloud-Native Architecture & CI/CD (Production Grade)
 
 ### Goals Achieved
 - Dockerized frontend application
@@ -109,7 +109,7 @@ A fully automated CI/CD pipeline was implemented.
 
 ---
 
-## 🔐 Security Best Practices
+## Security Best Practices
 - No secrets committed to repository
 - AWS credentials stored in GitHub Secrets
 - HTTPS enforced using ACM
@@ -117,7 +117,7 @@ A fully automated CI/CD pipeline was implemented.
 
 ---
 
-## 🏗️ Final Production Architecture
+## Final Production Architecture
 
 Developer (VS Code)
 ↓
@@ -227,6 +227,9 @@ Day 3 focused on extending **CST Meet** into a **real-time video meeting platfor
   - Returns host details
   - Returns normalized participant list
 
+- **MeetLite-AI-API**
+  - API to connect to Bedrock Agent(KB)
+  - To handle user queries
 ---
 
 ## Real-Time Signaling (WebSocket)
