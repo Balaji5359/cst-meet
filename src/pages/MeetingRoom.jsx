@@ -11,7 +11,9 @@ import {
   saveUserNote,
   saveUserRecording,
 } from '../services/meetApi'
-import { ICE_SERVERS, SIGNALING_WS_URL } from '../config/realtime'
+import { WEBRTC_CONFIG, MEDIA_CONSTRAINTS, RECORDER_OPTIONS, DEBUG_WEBRTC, SIGNALING_WS_URL } from '../config/realtime'
+
+const debugLog = DEBUG_WEBRTC ? console.log : () => {}
 
 const initialControls = {
   camera: true,
@@ -87,6 +89,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   const reconnectTimersRef = useRef({})
   const wsReconnectTimerRef = useRef(null)
   const isLeavingRef = useRef(false)
+  const participantsRef = useRef([])
   const participantsScrollRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const recordingChunksRef = useRef([])
@@ -141,6 +144,10 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     delete pendingIceCandidatesRef.current[key]
   }
 
+  
+  useEffect(() => {
+    participantsRef.current = participants
+  }, [participants])
   const clearReconnectTimer = (participantKey) => {
     const key = safeId(participantKey)
     if (!key) return
@@ -164,7 +171,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         existing.onconnectionstatechange = null
         existing.oniceconnectionstatechange = null
         existing.close()
-      } catch {
+      } catch (error) {
+        debugLog('[Media] getUserMedia failed', error)
         // ignore
       }
       delete peerConnectionsRef.current[key]
@@ -216,6 +224,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       try {
         // eslint-disable-next-line no-await-in-loop
         await pc.addIceCandidate(new RTCIceCandidate(candidate))
+        debugLog('[WebRTC] ICE added from', fromEmail)
       } catch (error) {
         console.error('[WebRTC] Failed to flush ICE candidate', error)
       }
@@ -332,7 +341,13 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     try {
       recordingChunksRef.current = []
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' })
+      const mimeType = MediaRecorder.isTypeSupported(RECORDER_OPTIONS.mimeType) 
+        ? RECORDER_OPTIONS.mimeType 
+        : 'video/webm'
+      const recorder = new MediaRecorder(stream, { 
+        mimeType, 
+        videoBitsPerSecond: RECORDER_OPTIONS.videoBitsPerSecond 
+      })
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -398,7 +413,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
           setRecordingStatus('Recording saved.')
           window.setTimeout(() => setRecordingStatus(''), 2200)
         }
-      } catch {
+      } catch (error) {
+        debugLog('[Media] getUserMedia failed', error)
         setStatusError('Recording save failed.')
       }
     }
@@ -418,10 +434,10 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   }
 
   const sendOfferTo = async (targetEmail) => {
+    debugLog('[WebRTC] sendOfferTo called for', targetEmail)
     const targetKey = safeId(targetEmail)
     if (!targetKey || targetKey === selfEmailKey) return
     if (!shouldInitiateOffer(selfEmail, targetEmail)) return
-    if (!wsReadyRef.current) return
 
     const pc = createPeerConnection(targetEmail)
     if (!pc) return
@@ -441,6 +457,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     try {
       const offer = await pc.createOffer()
+      debugLog('[WebRTC] created offer for', targetEmail)
       await pc.setLocalDescription(offer)
 
       sendSignal({
@@ -466,7 +483,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     clearReconnectTimer(remoteKey)
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
+    const pc = new RTCPeerConnection(WEBRTC_CONFIG)
+    debugLog('[WebRTC] pc created for', remoteEmail)
 
     const stream = localStreamRef.current
     if (stream) {
@@ -475,6 +493,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     pc.onicecandidate = (event) => {
       if (!event.candidate) return
+      debugLog('[WebRTC] ICE generated for', remoteEmail)
 
       sendSignal({
         action: 'signal',
@@ -517,6 +536,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
 
     pc.onconnectionstatechange = () => {
+      debugLog('[WebRTC] connectionState', remoteEmail, pc.connectionState)
       if (pc.connectionState === 'connected') {
         clearReconnectTimer(remoteEmail)
         return
@@ -539,6 +559,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
 
     pc.oniceconnectionstatechange = () => {
+      debugLog('[WebRTC] iceConnectionState', remoteEmail, pc.iceConnectionState)
       if (pc.iceConnectionState === 'failed') {
         schedulePeerReconnect(600)
       }
@@ -557,6 +578,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
 
     const type = (message?.type || '').toLowerCase()
+    debugLog('[WS] received', type, 'from', message?.from || message?.fromEmail, 'to', message?.to || message?.toEmail)
     if (!['offer', 'answer', 'ice', 'state'].includes(type)) return
 
     const fromEmail = (message.from || message.fromEmail || '').trim()
@@ -580,9 +602,11 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         }
 
         await pc.setRemoteDescription(new RTCSessionDescription(offer))
+        debugLog('[WebRTC] remote offer set from', fromEmail)
         await flushPendingIceCandidates(remoteKey, pc)
 
         const answer = await pc.createAnswer()
+        debugLog('[WebRTC] answer created for', fromEmail)
         await pc.setLocalDescription(answer)
 
         sendSignal({
@@ -615,6 +639,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         if (!answer) return
 
         await pc.setRemoteDescription(new RTCSessionDescription(answer))
+        debugLog('[WebRTC] remote answer set from', fromEmail)
         await flushPendingIceCandidates(remoteKey, pc)
       }
 
@@ -629,6 +654,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         }
 
         await pc.addIceCandidate(new RTCIceCandidate(candidate))
+        debugLog('[WebRTC] ICE added from', fromEmail)
       }
 
       if (type === 'state') {
@@ -658,6 +684,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     const connectWebSocket = () => {
       const wsUrl = normalizeWsUrl(SIGNALING_WS_URL, roomName, selfEmail)
+      debugLog('[WS] connecting', wsUrl)
       if (!wsUrl) {
         setStatusError('Signaling WebSocket URL is not configured.')
         return
@@ -668,15 +695,24 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       wsReadyRef.current = false
 
       socket.onopen = () => {
+        debugLog('[WS] open')
         wsReadyRef.current = true
         setStatusError('')
         flushPendingSignals()
         sendParticipantState(controls)
+
+        // Start negotiation immediately for already-known participants.
+        participantsRef.current.forEach((participant) => {
+          const targetEmail = (participant?.email || '').trim()
+          if (!targetEmail) return
+          sendOfferTo(targetEmail)
+        })
       }
 
       socket.onmessage = handleSignalMessage
 
       socket.onclose = () => {
+        debugLog('[WS] close')
         wsReadyRef.current = false
         if (!unmounted && !isLeavingRef.current) {
           setStatusError('Realtime disconnected. Reconnecting...')
@@ -690,6 +726,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       }
 
       socket.onerror = () => {
+        debugLog('[WS] error')
         wsReadyRef.current = false
         if (!unmounted && !isLeavingRef.current) {
           setStatusError('WebSocket signaling failed. Reconnecting...')
@@ -699,7 +736,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     const startMediaAndSignaling = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+        const stream = await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS)
+        debugLog('[Media] local stream started', stream.getTracks().map((t) => t.kind))
         if (unmounted) {
           stream.getTracks().forEach((track) => track.stop())
           return
@@ -709,7 +747,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
         localStreamRef.current = stream
         setLocalStream(stream)
         setMediaBlocked(false)
-      } catch {
+      } catch (error) {
+        debugLog('[Media] getUserMedia failed', error)
         setMediaBlocked(true)
         setStatusError('Camera or microphone permission denied.')
         return
@@ -820,11 +859,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       })
 
       for (const participant of deduped.values()) {
-        const key = safeId(participant.email)
-        if (!peerConnectionsRef.current[key] && wsReadyRef.current) {
-          // eslint-disable-next-line no-await-in-loop
-          await sendOfferTo(participant.email)
-        }
+        // eslint-disable-next-line no-await-in-loop
+        await sendOfferTo(participant.email)
       }
 
       if (status === 'EXPIRED') {
@@ -833,7 +869,7 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
 
     syncMeetingStatus()
-    const timerId = window.setInterval(syncMeetingStatus, 30000)
+    const timerId = window.setInterval(syncMeetingStatus, 5000)
 
     return () => {
       cancelled = true
@@ -1094,3 +1130,8 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 }
 
 export default MeetingRoom
+
+
+
+
+

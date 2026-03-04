@@ -13,3 +13,30 @@ export const ICE_SERVERS = [
     credential: 'openrelayproject',
   },
 ]
+
+export const WEBRTC_CONFIG = {
+  iceServers: ICE_SERVERS,
+  iceCandidatePoolSize: 10,
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require',
+}
+
+export const MEDIA_CONSTRAINTS = {
+  video: {
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    frameRate: { ideal: 30 },
+  },
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+}
+
+export const RECORDER_OPTIONS = {
+  mimeType: 'video/webm;codecs=vp8,opus',
+  videoBitsPerSecond: 2500000,
+}
+
+export const DEBUG_WEBRTC = false
