@@ -424,11 +424,45 @@ fields-related-data-of-myapp/
 
 **Services**:
 - `meetApi.js` - API client wrapper
+- `webrtc.js` - WebRTC manager service
 - `cognito.js` - Auth configuration
-- `realtime.js` - WebRTC configuration
 
 **Context**:
 - `MeetAuthContext.jsx` - Global auth state
+
+### WebRTC Implementation
+
+The WebRTC service (`webrtc.js`) is a clean implementation based on the working HTML test file, providing:
+
+**WebRTCManager Class**:
+- Direct WebSocket connection management
+- Peer connection lifecycle handling
+- ICE candidate queuing and flushing
+- Offer/answer negotiation
+- Stream management
+
+**Key Features**:
+- Simple API: `startMedia()`, `connectWebSocket()`, `sendOfferTo()`
+- Event callbacks: `onTrack()`, `onConnectionState()`
+- Automatic cleanup on disconnect
+- No React state overhead in WebRTC operations
+
+**Configuration**:
+```javascript
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp'
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
+]
+```
 
 ### State Management
 
@@ -440,15 +474,24 @@ Uses React hooks for local state:
 
 ### WebRTC Flow
 
-1. User joins meeting → `getUserMedia()` for local stream
-2. Poll `/meeting/getid` every 5s for participant list
-3. For each new participant:
-   - Create `RTCPeerConnection`
-   - Add local tracks
-   - Initiate offer/answer exchange via WebSocket
-   - Exchange ICE candidates
-4. On `ontrack` event → Display remote stream
-5. Handle reconnection on connection failure
+**Using WebRTCManager Service**:
+
+1. Initialize manager: `new WebRTCManager(meetingId, userEmail)`
+2. Start media: `await manager.startMedia()` → Gets local camera/mic stream
+3. Connect WebSocket: `manager.connectWebSocket()` → Opens signaling channel
+4. Poll participants: `/meeting/getid` every 5s
+5. For each new participant:
+   - Call `manager.sendOfferTo(email)` if should initiate
+   - Manager handles offer/answer exchange automatically
+   - Manager queues ICE candidates until remote description is set
+6. On remote track: `manager.onTrack((email, stream) => ...)` → Display video
+7. On disconnect: `manager.cleanup()` → Closes all connections
+
+**Advantages**:
+- Clean separation: WebRTC logic in service, React handles UI only
+- No state overhead: Direct peer connection management
+- Fast performance: Matches HTML test file speed
+- Easy debugging: Simple, linear flow
 
 ---
 
