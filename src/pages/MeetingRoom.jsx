@@ -1,19 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Header from '../components/Header'
 import VideoGrid from '../components/VideoGrid'
 import ControlBar from '../components/ControlBar'
 import NotesPanel from '../components/NotesPanel'
-import {
-  extractErrorMessage,
-  getMeetingStatus,
-  getUserNotes,
-  leaveMeeting,
-  saveUserNote,
-  saveUserRecording,
-} from '../services/meetApi'
-import { WEBRTC_CONFIG, MEDIA_CONSTRAINTS, RECORDER_OPTIONS, DEBUG_WEBRTC, SIGNALING_WS_URL } from '../config/realtime'
-
-const debugLog = DEBUG_WEBRTC ? console.log : () => {}
+import { getMeetingStatus, leaveMeeting, saveUserNote, saveUserRecording, extractErrorMessage } from '../services/meetApi'
+import { WebRTCManager } from '../services/webrtc'
 
 const initialControls = {
   camera: true,
@@ -28,82 +19,27 @@ function safeId(value = '') {
   return String(value).trim().toLowerCase()
 }
 
-function normalizeWsUrl(baseUrl, meetingId, email) {
-  if (!baseUrl) return ''
-  const trimmed = baseUrl.trim()
-  const separator = trimmed.includes('?') ? '&' : '?'
-  return `${trimmed}${separator}meetingId=${encodeURIComponent(meetingId)}&email=${encodeURIComponent(email)}`
-}
-
-function shouldInitiateOffer(selfEmail, targetEmail) {
-  return safeId(selfEmail) < safeId(targetEmail)
-}
-
-function formatRecordingLabel(seconds) {
-  const mins = Math.floor(seconds / 60)
-  const secs = seconds % 60
-  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = String(reader.result || '')
-      const base64 = result.includes(',') ? result.split(',')[1] : result
-      resolve(base64)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
 function MeetingRoom({ onNavigate, roomPath, user }) {
   const [controls, setControls] = useState(initialControls)
   const [theme, setTheme] = useState('light')
   const [meetingStatus, setMeetingStatus] = useState('Checking...')
   const [statusError, setStatusError] = useState('')
   const [isLeaving, setIsLeaving] = useState(false)
-  const [mediaBlocked, setMediaBlocked] = useState(false)
-  const [mediaRetryTick, setMediaRetryTick] = useState(0)
-  const [hostUserId, setHostUserId] = useState('')
   const [participants, setParticipants] = useState([])
   const [localStream, setLocalStream] = useState(null)
-  const [isScreenSharing, setIsScreenSharing] = useState(false)
-  const [canScrollTop, setCanScrollTop] = useState(false)
-  const [canScrollBottom, setCanScrollBottom] = useState(false)
-  const [participantsScroll, setParticipantsScroll] = useState({ canPrev: false, canNext: false })
   const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [recordingStatus, setRecordingStatus] = useState('')
   const [isRecordingBusy, setIsRecordingBusy] = useState(false)
-  const [noteInitialValue, setNoteInitialValue] = useState('')
 
-  const wsRef = useRef(null)
-  const wsReadyRef = useRef(false)
-  const peerConnectionsRef = useRef({})
-  const localStreamRef = useRef(null)
-  const cameraStreamRef = useRef(null)
-  const screenStreamRef = useRef(null)
-  const pendingIceCandidatesRef = useRef({})
-  const pendingSignalsRef = useRef([])
-  const reconnectTimersRef = useRef({})
-  const wsReconnectTimerRef = useRef(null)
-  const isLeavingRef = useRef(false)
-  const participantsRef = useRef([])
-  const participantsScrollRef = useRef(null)
+  const webrtcRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const recordingChunksRef = useRef([])
   const recordingTimerRef = useRef(null)
+  const statusPollTimerRef = useRef(null)
 
-  const roomName = useMemo(() => roomPath.split('/').at(-1) || '', [roomPath])
-  const selfName = user?.name || user?.email || 'You'
+  const roomName = roomPath.split('/').at(-1) || ''
   const selfEmail = user?.email || ''
-  const selfEmailKey = safeId(selfEmail)
-  const selfUserId = user?.userId || ''
-  const selfIsHost =
-    !!hostUserId &&
-    !!selfEmail &&
-    (safeId(hostUserId) === selfEmailKey || safeId(hostUserId) === safeId(selfUserId))
+  const selfName = user?.name || user?.email || 'You'
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -111,243 +47,114 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
   }, [theme])
 
   useEffect(() => {
-    const onScroll = () => {
-      const top = window.scrollY
-      const maxScroll = document.documentElement.scrollHeight - window.innerHeight
-      setCanScrollTop(top > 120)
-      setCanScrollBottom(maxScroll - top > 120)
+    if (!roomName || !selfEmail) return
+
+    const manager = new WebRTCManager(roomName, selfEmail)
+    webrtcRef.current = manager
+
+    manager.onTrack((email, stream) => {
+      setParticipants((prev) => {
+        const filtered = prev.filter((p) => safeId(p.email) !== safeId(email))
+        return [...filtered, { id: email, email, label: email, stream, cameraOn: true }]
+      })
+    })
+
+    manager.onConnectionState((email, state) => {
+      if (state === 'failed' || state === 'closed') {
+        setParticipants((prev) => prev.filter((p) => safeId(p.email) !== safeId(email)))
+      }
+    })
+
+    const init = async () => {
+      try {
+        const stream = await manager.startMedia()
+        setLocalStream(stream)
+        manager.connectWebSocket()
+        await syncParticipants()
+        startStatusPolling()
+      } catch (err) {
+        setStatusError('Camera or microphone permission denied.')
+      }
     }
 
-    onScroll()
-    window.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('resize', onScroll)
+    init()
+
     return () => {
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', onScroll)
+      if (statusPollTimerRef.current) clearInterval(statusPollTimerRef.current)
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current)
+      manager.cleanup()
     }
-  }, [])
+  }, [roomName, selfEmail])
 
-  const addOrUpdateParticipant = (nextParticipant) => {
-    const key = safeId(nextParticipant.email || nextParticipant.id)
-    if (!key || key === selfEmailKey) return
+  const syncParticipants = async () => {
+    if (!roomName) return
 
-    setParticipants((prev) => {
-      const filtered = prev.filter((item) => safeId(item.email || item.id) !== key)
-      return [...filtered, nextParticipant]
-    })
-  }
-
-  const removeParticipant = (participantKey) => {
-    const key = safeId(participantKey)
-    if (!key) return
-    setParticipants((prev) => prev.filter((item) => safeId(item.email || item.id) !== key))
-    delete pendingIceCandidatesRef.current[key]
-  }
-
-  
-  useEffect(() => {
-    participantsRef.current = participants
-  }, [participants])
-  const clearReconnectTimer = (participantKey) => {
-    const key = safeId(participantKey)
-    if (!key) return
-
-    const timer = reconnectTimersRef.current[key]
-    if (timer) {
-      window.clearTimeout(timer)
-      delete reconnectTimersRef.current[key]
-    }
-  }
-
-  const clearPeerConnection = (participantKey) => {
-    const key = safeId(participantKey)
-    if (!key) return
-
-    const existing = peerConnectionsRef.current[key]
-    if (existing) {
-      try {
-        existing.onicecandidate = null
-        existing.ontrack = null
-        existing.onconnectionstatechange = null
-        existing.oniceconnectionstatechange = null
-        existing.close()
-      } catch (error) {
-        debugLog('[Media] getUserMedia failed', error)
-        // ignore
-      }
-      delete peerConnectionsRef.current[key]
-    }
-
-    delete pendingIceCandidatesRef.current[key]
-    clearReconnectTimer(key)
-  }
-
-  const flushPendingSignals = () => {
-    const socket = wsRef.current
-    if (!socket || socket.readyState !== WebSocket.OPEN) return
-
-    const queued = pendingSignalsRef.current
-    pendingSignalsRef.current = []
-    queued.forEach((payload) => socket.send(JSON.stringify(payload)))
-  }
-
-  const sendSignal = (payload) => {
-    const socket = wsRef.current
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      pendingSignalsRef.current.push(payload)
-      return
-    }
-    socket.send(JSON.stringify(payload))
-  }
-
-  const sendParticipantState = (nextControls) => {
-    sendSignal({
-      action: 'signal',
-      type: 'state',
-      meetingId: roomName,
-      from: selfEmail,
-      payload: {
-        mute: !!nextControls.mute,
-        camera: !!nextControls.camera,
-        record: !!nextControls.record,
-      },
-    })
-  }
-
-  const flushPendingIceCandidates = async (remoteKey, pc) => {
-    const queued = pendingIceCandidatesRef.current[remoteKey] || []
-    if (!queued.length) return
-
-    pendingIceCandidatesRef.current[remoteKey] = []
-
-    for (const candidate of queued) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        await pc.addIceCandidate(new RTCIceCandidate(candidate))
-        debugLog('[WebRTC] ICE added from', fromEmail)
-      } catch (error) {
-        console.error('[WebRTC] Failed to flush ICE candidate', error)
-      }
-    }
-  }
-
-  const queueIceCandidate = (remoteKey, candidate) => {
-    if (!pendingIceCandidatesRef.current[remoteKey]) {
-      pendingIceCandidatesRef.current[remoteKey] = []
-    }
-    pendingIceCandidatesRef.current[remoteKey].push(candidate)
-  }
-
-  const replaceOutgoingVideoTrack = async (newTrack) => {
-    const peerConnections = Object.values(peerConnectionsRef.current)
-
-    for (const pc of peerConnections) {
-      const sender = pc
-        .getSenders()
-        .find((currentSender) => currentSender.track && currentSender.track.kind === 'video')
-
-      if (sender) {
-        // eslint-disable-next-line no-await-in-loop
-        await sender.replaceTrack(newTrack)
-      }
-    }
-  }
-
-  const stopScreenShare = async () => {
-    if (!isScreenSharing) return
-
-    const displayStream = screenStreamRef.current
-    if (displayStream) {
-      displayStream.getTracks().forEach((track) => track.stop())
-    }
-    screenStreamRef.current = null
-
-    const cameraStream = cameraStreamRef.current
-    const cameraTrack = cameraStream?.getVideoTracks()?.[0] || null
-
-    if (cameraTrack) {
-      cameraTrack.enabled = controls.camera
-      try {
-        await replaceOutgoingVideoTrack(cameraTrack)
-      } catch (error) {
-        console.error('[WebRTC] Failed to restore camera track', error)
-      }
-
-      localStreamRef.current = cameraStream
-      setLocalStream(cameraStream)
-    }
-
-    setIsScreenSharing(false)
-    setControls((prev) => ({ ...prev, screenshare: false }))
-  }
-
-  const startScreenShare = async () => {
-    if (!cameraStreamRef.current) {
-      setStatusError('Camera stream is not ready yet.')
+    const response = await getMeetingStatus(roomName)
+    if (!response.ok) {
+      setStatusError(extractErrorMessage(response))
       return
     }
 
-    try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
-      const displayTrack = displayStream.getVideoTracks()[0]
-      if (!displayTrack) return
+    const data = response.data || {}
+    setMeetingStatus((data.status || 'UNKNOWN').toUpperCase())
 
-      displayTrack.onended = () => {
-        stopScreenShare().catch(() => {})
+    const participantsFromApi = Array.isArray(data.participants) ? data.participants : []
+    
+    for (const p of participantsFromApi) {
+      const email = (p.userEmail || p.email || '').trim().toLowerCase()
+      if (!email || email === selfEmail.toLowerCase()) continue
+      
+      const manager = webrtcRef.current
+      if (manager && !manager.peerConnections[safeId(email)]) {
+        await manager.sendOfferTo(email)
       }
+    }
 
-      await replaceOutgoingVideoTrack(displayTrack)
-
-      const previewTracks = [displayTrack]
-      const audioTrack = cameraStreamRef.current.getAudioTracks()[0]
-      if (audioTrack) previewTracks.push(audioTrack)
-
-      const previewStream = new MediaStream(previewTracks)
-      localStreamRef.current = previewStream
-      setLocalStream(previewStream)
-      screenStreamRef.current = displayStream
-      setIsScreenSharing(true)
-      setControls((prev) => ({ ...prev, screenshare: true }))
-      setStatusError('')
-    } catch {
-      setStatusError('Screen share was cancelled or blocked.')
+    if (data.status === 'EXPIRED') {
+      setTimeout(() => onNavigate('/dashboard'), 1200)
     }
   }
 
-  const setRecordingControl = (enabled) => {
+  const startStatusPolling = () => {
+    if (statusPollTimerRef.current) clearInterval(statusPollTimerRef.current)
+    statusPollTimerRef.current = setInterval(syncParticipants, 5000)
+  }
+
+  const handleToggle = (key) => {
+    if (key === 'record') {
+      if (controls.record) {
+        stopRecording()
+      } else {
+        startRecording()
+      }
+      return
+    }
+
     setControls((prev) => {
-      const next = { ...prev, record: enabled }
-      sendParticipantState(next)
+      const next = { ...prev, [key]: !prev[key] }
+      if (key === 'theme') setTheme(next.theme ? 'dark' : 'light')
+      
+      if (key === 'mute' && localStream) {
+        localStream.getAudioTracks().forEach((track) => { track.enabled = !next.mute })
+      }
+      
+      if (key === 'camera' && localStream) {
+        localStream.getVideoTracks().forEach((track) => { track.enabled = next.camera })
+      }
+      
       return next
     })
   }
 
-  const startRecordingFlow = () => {
-    if (isRecordingBusy || controls.record) return
+  const startRecording = () => {
+    if (isRecordingBusy || controls.record || !localStream) return
 
     const approved = window.confirm('Start recording now?')
     if (!approved) return
 
-    const stream = localStreamRef.current || cameraStreamRef.current
-    if (!stream) {
-      setStatusError('Local media stream not ready for recording.')
-      return
-    }
-
-    if (typeof MediaRecorder === 'undefined') {
-      setStatusError('Recording is not supported in this browser.')
-      return
-    }
-
     try {
       recordingChunksRef.current = []
-      const mimeType = MediaRecorder.isTypeSupported(RECORDER_OPTIONS.mimeType) 
-        ? RECORDER_OPTIONS.mimeType 
-        : 'video/webm'
-      const recorder = new MediaRecorder(stream, { 
-        mimeType, 
-        videoBitsPerSecond: RECORDER_OPTIONS.videoBitsPerSecond 
-      })
+      const recorder = new MediaRecorder(localStream, { mimeType: 'video/webm' })
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -357,10 +164,10 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
       recorder.start(1000)
       mediaRecorderRef.current = recorder
-      setRecordingControl(true)
+      setControls((prev) => ({ ...prev, record: true }))
       setRecordingSeconds(0)
-      setRecordingStatus('Recording in progress...')
-      recordingTimerRef.current = window.setInterval(() => {
+      setRecordingStatus('Recording...')
+      recordingTimerRef.current = setInterval(() => {
         setRecordingSeconds((prev) => prev + 1)
       }, 1000)
     } catch {
@@ -368,12 +175,12 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     }
   }
 
-  const stopRecordingFlow = async () => {
+  const stopRecording = async () => {
     if (!controls.record || isRecordingBusy) return
 
     const recorder = mediaRecorderRef.current
     if (!recorder) {
-      setRecordingControl(false)
+      setControls((prev) => ({ ...prev, record: false }))
       return
     }
 
@@ -388,33 +195,36 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
 
     mediaRecorderRef.current = null
     if (recordingTimerRef.current) {
-      window.clearInterval(recordingTimerRef.current)
+      clearInterval(recordingTimerRef.current)
       recordingTimerRef.current = null
     }
 
-    setRecordingControl(false)
+    setControls((prev) => ({ ...prev, record: false }))
     setRecordingStatus('')
 
     const shouldSave = window.confirm('Save this recording?')
     if (shouldSave) {
       try {
-        const contentBase64 = await fileToBase64(stoppedBlob)
-        const response = await saveUserRecording({
-          email: selfEmail,
-          meetingid: roomName,
-          extension: 'webm',
-          mimeType: 'video/webm',
-          contentBase64,
-        })
+        const reader = new FileReader()
+        reader.onload = async () => {
+          const base64 = String(reader.result || '').split(',')[1]
+          const response = await saveUserRecording({
+            email: selfEmail,
+            meetingid: roomName,
+            extension: 'webm',
+            mimeType: 'video/webm',
+            contentBase64: base64,
+          })
 
-        if (!response.ok) {
-          setStatusError(extractErrorMessage(response))
-        } else {
-          setRecordingStatus('Recording saved.')
-          window.setTimeout(() => setRecordingStatus(''), 2200)
+          if (!response.ok) {
+            setStatusError(extractErrorMessage(response))
+          } else {
+            setRecordingStatus('Recording saved.')
+            setTimeout(() => setRecordingStatus(''), 2200)
+          }
         }
-      } catch (error) {
-        debugLog('[Media] getUserMedia failed', error)
+        reader.readAsDataURL(stoppedBlob)
+      } catch {
         setStatusError('Recording save failed.')
       }
     }
@@ -433,558 +243,22 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     return true
   }
 
-  const sendOfferTo = async (targetEmail) => {
-    debugLog('[WebRTC] sendOfferTo called for', targetEmail)
-    const targetKey = safeId(targetEmail)
-    if (!targetKey || targetKey === selfEmailKey) return
-    if (!shouldInitiateOffer(selfEmail, targetEmail)) return
-
-    const pc = createPeerConnection(targetEmail)
-    if (!pc) return
-
-    if (pc.signalingState !== 'stable') {
-      if (pc.signalingState === 'have-local-offer') {
-        try {
-          await pc.setLocalDescription({ type: 'rollback' })
-        } catch (error) {
-          console.error('[WebRTC] Failed to rollback stale offer for', targetEmail, error)
-          return
-        }
-      } else {
-        return
-      }
-    }
-
-    try {
-      const offer = await pc.createOffer()
-      debugLog('[WebRTC] created offer for', targetEmail)
-      await pc.setLocalDescription(offer)
-
-      sendSignal({
-        action: 'signal',
-        type: 'offer',
-        meetingId: roomName,
-        from: selfEmail,
-        to: targetEmail,
-        payload: offer,
-      })
-    } catch (error) {
-      console.error('[WebRTC] Failed to send offer', error)
-    }
-  }
-
-  const createPeerConnection = (remoteEmail) => {
-    const remoteKey = safeId(remoteEmail)
-    if (!remoteKey || remoteKey === selfEmailKey) return null
-
-    if (peerConnectionsRef.current[remoteKey]) {
-      return peerConnectionsRef.current[remoteKey]
-    }
-
-    clearReconnectTimer(remoteKey)
-
-    const pc = new RTCPeerConnection(WEBRTC_CONFIG)
-    debugLog('[WebRTC] pc created for', remoteEmail)
-
-    const stream = localStreamRef.current
-    if (stream) {
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream))
-    }
-
-    pc.onicecandidate = (event) => {
-      if (!event.candidate) return
-      debugLog('[WebRTC] ICE generated for', remoteEmail)
-
-      sendSignal({
-        action: 'signal',
-        type: 'ice',
-        meetingId: roomName,
-        from: selfEmail,
-        to: remoteEmail,
-        payload: event.candidate,
-      })
-    }
-
-    pc.ontrack = (event) => {
-      const [remoteStream] = event.streams
-      if (!remoteStream) return
-
-      addOrUpdateParticipant({
-        id: remoteEmail,
-        label: remoteEmail,
-        email: remoteEmail,
-        stream: remoteStream,
-        cameraOn: true,
-        role: 'PARTICIPANT',
-        isHost:
-          !!hostUserId &&
-          (safeId(hostUserId) === remoteKey || safeId(hostUserId) === safeId(remoteEmail)),
-      })
-    }
-
-    const schedulePeerReconnect = (delayMs = 1200) => {
-      const retryKey = safeId(remoteEmail)
-      clearReconnectTimer(retryKey)
-      reconnectTimersRef.current[retryKey] = window.setTimeout(() => {
-        delete reconnectTimersRef.current[retryKey]
-        clearPeerConnection(remoteEmail)
-        removeParticipant(remoteEmail)
-        if (wsReadyRef.current) {
-          sendOfferTo(remoteEmail)
-        }
-      }, delayMs)
-    }
-
-    pc.onconnectionstatechange = () => {
-      debugLog('[WebRTC] connectionState', remoteEmail, pc.connectionState)
-      if (pc.connectionState === 'connected') {
-        clearReconnectTimer(remoteEmail)
-        return
-      }
-
-      if (pc.connectionState === 'disconnected') {
-        schedulePeerReconnect(3500)
-        return
-      }
-
-      if (pc.connectionState === 'failed') {
-        schedulePeerReconnect(800)
-        return
-      }
-
-      if (pc.connectionState === 'closed') {
-        clearPeerConnection(remoteEmail)
-        removeParticipant(remoteEmail)
-      }
-    }
-
-    pc.oniceconnectionstatechange = () => {
-      debugLog('[WebRTC] iceConnectionState', remoteEmail, pc.iceConnectionState)
-      if (pc.iceConnectionState === 'failed') {
-        schedulePeerReconnect(600)
-      }
-    }
-
-    peerConnectionsRef.current[remoteKey] = pc
-    return pc
-  }
-
-  const handleSignalMessage = async (event) => {
-    let message
-    try {
-      message = JSON.parse(event.data)
-    } catch {
-      return
-    }
-
-    const type = (message?.type || '').toLowerCase()
-    debugLog('[WS] received', type, 'from', message?.from || message?.fromEmail, 'to', message?.to || message?.toEmail)
-    if (!['offer', 'answer', 'ice', 'state'].includes(type)) return
-
-    const fromEmail = (message.from || message.fromEmail || '').trim()
-    const toEmail = (message.to || message.toEmail || '').trim()
-
-    if (!fromEmail) return
-    if (toEmail && safeId(toEmail) !== selfEmailKey) return
-
-    const remoteKey = safeId(fromEmail)
-
-    try {
-      if (type === 'offer') {
-        const pc = createPeerConnection(fromEmail)
-        if (!pc) return
-
-        const offer = message.payload || message.data || message.offer
-        if (!offer) return
-
-        if (pc.signalingState !== 'stable') {
-          await pc.setLocalDescription({ type: 'rollback' })
-        }
-
-        await pc.setRemoteDescription(new RTCSessionDescription(offer))
-        debugLog('[WebRTC] remote offer set from', fromEmail)
-        await flushPendingIceCandidates(remoteKey, pc)
-
-        const answer = await pc.createAnswer()
-        debugLog('[WebRTC] answer created for', fromEmail)
-        await pc.setLocalDescription(answer)
-
-        sendSignal({
-          action: 'signal',
-          type: 'answer',
-          meetingId: roomName,
-          from: selfEmail,
-          to: fromEmail,
-          payload: answer,
-        })
-
-        addOrUpdateParticipant({
-          id: fromEmail,
-          label: fromEmail,
-          email: fromEmail,
-          stream: null,
-          cameraOn: true,
-          role: 'PARTICIPANT',
-          isHost:
-            !!hostUserId &&
-            (safeId(hostUserId) === remoteKey || safeId(hostUserId) === safeId(fromEmail)),
-        })
-      }
-
-      if (type === 'answer') {
-        const pc = peerConnectionsRef.current[remoteKey]
-        if (!pc) return
-
-        const answer = message.payload || message.data || message.answer
-        if (!answer) return
-
-        await pc.setRemoteDescription(new RTCSessionDescription(answer))
-        debugLog('[WebRTC] remote answer set from', fromEmail)
-        await flushPendingIceCandidates(remoteKey, pc)
-      }
-
-      if (type === 'ice') {
-        const candidate = message.payload || message.data || message.candidate
-        if (!candidate) return
-
-        const pc = peerConnectionsRef.current[remoteKey]
-        if (!pc || !pc.remoteDescription) {
-          queueIceCandidate(remoteKey, candidate)
-          return
-        }
-
-        await pc.addIceCandidate(new RTCIceCandidate(candidate))
-        debugLog('[WebRTC] ICE added from', fromEmail)
-      }
-
-      if (type === 'state') {
-        const next = message.payload || message.data || {}
-
-        setParticipants((prev) =>
-          prev.map((item) => {
-            const currentKey = safeId(item.email || item.id)
-            if (currentKey !== remoteKey) return item
-            return {
-              ...item,
-              isMuted: !!next.mute,
-              cameraOn: next.camera !== false,
-              isRecording: !!next.record,
-            }
-          }),
-        )
-      }
-    } catch (error) {
-      console.error('[WebRTC] Negotiation error', error)
-      setStatusError('Realtime signaling failed during WebRTC negotiation.')
-    }
-  }
-
-  useEffect(() => {
-    let unmounted = false
-
-    const connectWebSocket = () => {
-      const wsUrl = normalizeWsUrl(SIGNALING_WS_URL, roomName, selfEmail)
-      debugLog('[WS] connecting', wsUrl)
-      if (!wsUrl) {
-        setStatusError('Signaling WebSocket URL is not configured.')
-        return
-      }
-
-      const socket = new WebSocket(wsUrl)
-      wsRef.current = socket
-      wsReadyRef.current = false
-
-      socket.onopen = () => {
-        debugLog('[WS] open')
-        wsReadyRef.current = true
-        setStatusError('')
-        flushPendingSignals()
-        sendParticipantState(controls)
-
-        // Start negotiation immediately for already-known participants.
-        participantsRef.current.forEach((participant) => {
-          const targetEmail = (participant?.email || '').trim()
-          if (!targetEmail) return
-          sendOfferTo(targetEmail)
-        })
-      }
-
-      socket.onmessage = handleSignalMessage
-
-      socket.onclose = () => {
-        debugLog('[WS] close')
-        wsReadyRef.current = false
-        if (!unmounted && !isLeavingRef.current) {
-          setStatusError('Realtime disconnected. Reconnecting...')
-          if (!wsReconnectTimerRef.current) {
-            wsReconnectTimerRef.current = window.setTimeout(() => {
-              wsReconnectTimerRef.current = null
-              connectWebSocket()
-            }, 1500)
-          }
-        }
-      }
-
-      socket.onerror = () => {
-        debugLog('[WS] error')
-        wsReadyRef.current = false
-        if (!unmounted && !isLeavingRef.current) {
-          setStatusError('WebSocket signaling failed. Reconnecting...')
-        }
-      }
-    }
-
-    const startMediaAndSignaling = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS)
-        debugLog('[Media] local stream started', stream.getTracks().map((t) => t.kind))
-        if (unmounted) {
-          stream.getTracks().forEach((track) => track.stop())
-          return
-        }
-
-        cameraStreamRef.current = stream
-        localStreamRef.current = stream
-        setLocalStream(stream)
-        setMediaBlocked(false)
-      } catch (error) {
-        debugLog('[Media] getUserMedia failed', error)
-        setMediaBlocked(true)
-        setStatusError('Camera or microphone permission denied.')
-        return
-      }
-
-      connectWebSocket()
-    }
-
-    if (roomName && selfEmail) {
-      startMediaAndSignaling()
-    }
-
-    return () => {
-      unmounted = true
-
-      if (recordingTimerRef.current) {
-        window.clearInterval(recordingTimerRef.current)
-        recordingTimerRef.current = null
-      }
-
-      if (wsReconnectTimerRef.current) {
-        window.clearTimeout(wsReconnectTimerRef.current)
-        wsReconnectTimerRef.current = null
-      }
-
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.close()
-      }
-      wsRef.current = null
-      wsReadyRef.current = false
-
-      Object.keys(peerConnectionsRef.current).forEach((key) => clearPeerConnection(key))
-      peerConnectionsRef.current = {}
-
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach((track) => track.stop())
-      }
-      screenStreamRef.current = null
-
-      if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks().forEach((track) => track.stop())
-      }
-      cameraStreamRef.current = null
-
-      localStreamRef.current = null
-      pendingIceCandidatesRef.current = {}
-      pendingSignalsRef.current = []
-      Object.values(reconnectTimersRef.current).forEach((timerId) => window.clearTimeout(timerId))
-      reconnectTimersRef.current = {}
-      setLocalStream(null)
-      setParticipants([])
-      setIsScreenSharing(false)
-    }
-  }, [roomName, selfEmail, mediaRetryTick])
-
-  useEffect(() => {
-    let cancelled = false
-
-    const syncMeetingStatus = async () => {
-      if (!roomName) return
-
-      const response = await getMeetingStatus(roomName)
-      if (cancelled) return
-
-      if (!response.ok) {
-        setStatusError(extractErrorMessage(response))
-        return
-      }
-
-      const data = response.data || {}
-      const status = (data.status || 'UNKNOWN').toUpperCase()
-      setMeetingStatus(status)
-
-      const hostId = (data.hostUserId || '').trim()
-      setHostUserId(hostId)
-
-      const participantsFromApi = Array.isArray(data.participants) ? data.participants : []
-      const deduped = new Map()
-
-      participantsFromApi.forEach((participant) => {
-        const email = (participant?.userEmail || participant?.email || '').trim()
-        if (!email) return
-
-        const key = safeId(email)
-        if (!key || key === selfEmailKey || deduped.has(key)) return
-
-        deduped.set(key, {
-          id: email,
-          label: email,
-          email,
-          stream: null,
-          cameraOn: true,
-          role: participant?.role || 'PARTICIPANT',
-          isHost: !!participant?.isHost || (!!hostId && safeId(hostId) === key),
-        })
-      })
-
-      setParticipants((prev) => {
-        const prevByKey = new Map(prev.map((item) => [safeId(item.email || item.id), item]))
-        const merged = []
-
-        deduped.forEach((incoming, key) => {
-          const existing = prevByKey.get(key)
-          merged.push(existing ? { ...incoming, stream: existing.stream || null } : incoming)
-        })
-
-        return merged
-      })
-
-      for (const participant of deduped.values()) {
-        // eslint-disable-next-line no-await-in-loop
-        await sendOfferTo(participant.email)
-      }
-
-      if (status === 'EXPIRED') {
-        window.setTimeout(() => onNavigate('/dashboard'), 1200)
-      }
-    }
-
-    syncMeetingStatus()
-    const timerId = window.setInterval(syncMeetingStatus, 5000)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(timerId)
-    }
-  }, [roomName, onNavigate, selfEmailKey])
-
-  useEffect(() => {
-    let cancelled = false
-
-    const loadLatestNote = async () => {
-      if (!controls.notes || !selfEmail) return
-
-      const response = await getUserNotes(selfEmail)
-      if (cancelled || !response.ok) return
-
-      const items = Array.isArray(response.data?.items) ? response.data.items : []
-      const meetingItems = items.filter((item) => String(item.filename || '').includes(`_${roomName}_`))
-      if (meetingItems.length > 0) {
-        setNoteInitialValue(`Latest saved note file: ${meetingItems[0].filename}`)
-      }
-    }
-
-    loadLatestNote()
-    return () => {
-      cancelled = true
-    }
-  }, [controls.notes, selfEmail, roomName])
-
-  const handleScreenShareToggle = async () => {
-    if (isScreenSharing) {
-      await stopScreenShare()
-      return
-    }
-
-    await startScreenShare()
-  }
-
-  const handleToggle = (key) => {
-    if (key === 'screenshare') {
-      handleScreenShareToggle().catch(() => {
-        setStatusError('Unable to toggle screen share.')
-      })
-      return
-    }
-
-    if (key === 'record') {
-      if (controls.record) {
-        stopRecordingFlow()
-      } else {
-        startRecordingFlow()
-      }
-      return
-    }
-
-    setControls((prev) => {
-      const next = { ...prev, [key]: !prev[key] }
-
-      if (key === 'theme') {
-        setTheme(next.theme ? 'dark' : 'light')
-      }
-
-      if (key === 'mute' && cameraStreamRef.current) {
-        cameraStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = !next.mute
-        })
-      }
-
-      if (key === 'camera' && cameraStreamRef.current) {
-        cameraStreamRef.current.getVideoTracks().forEach((track) => {
-          track.enabled = next.camera
-        })
-      }
-
-      if (key === 'mute' || key === 'camera') {
-        sendParticipantState(next)
-      }
-
-      return next
-    })
-  }
-
   const handleLeaveMeeting = async () => {
     const confirmed = window.confirm('Are you sure you want to leave this meeting?')
     if (!confirmed) return
 
-    if (controls.record) {
-      await stopRecordingFlow()
-    }
+    if (controls.record) await stopRecording()
 
     setIsLeaving(true)
-    isLeavingRef.current = true
 
-    await stopScreenShare()
-
-    Object.keys(peerConnectionsRef.current).forEach((key) => clearPeerConnection(key))
-    peerConnectionsRef.current = {}
-
-    if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach((track) => track.stop())
-    }
-    cameraStreamRef.current = null
-
-    localStreamRef.current = null
-    setLocalStream(null)
-
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.close()
+    if (webrtcRef.current) {
+      webrtcRef.current.cleanup()
     }
 
     const response = await leaveMeeting(roomName, selfEmail)
     setIsLeaving(false)
 
     if (!response.ok) {
-      isLeavingRef.current = false
       setStatusError(extractErrorMessage(response))
       return
     }
@@ -992,103 +266,30 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
     onNavigate('/dashboard')
   }
 
-  const handleEnableMedia = () => {
-    setStatusError('')
-    setMediaRetryTick((value) => value + 1)
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
   }
-
-  const handleScrollTop = () => {
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  const handleScrollBottom = () => {
-    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
-  }
-
-  const updateParticipantsScroll = () => {
-    const node = participantsScrollRef.current
-    if (!node) return
-
-    const horizontal = node.scrollWidth > node.clientWidth + 4
-    const next = horizontal
-      ? {
-          canPrev: node.scrollLeft > 8,
-          canNext: node.scrollLeft + node.clientWidth < node.scrollWidth - 8,
-        }
-      : {
-          canPrev: node.scrollTop > 8,
-          canNext: node.scrollTop + node.clientHeight < node.scrollHeight - 8,
-        }
-
-    setParticipantsScroll((prev) =>
-      prev.canPrev === next.canPrev && prev.canNext === next.canNext ? prev : next,
-    )
-  }
-
-  const registerParticipantsScroller = (node) => {
-    if (participantsScrollRef.current === node) return
-    participantsScrollRef.current = node
-  }
-
-  const handleParticipantsScroll = (direction) => {
-    const node = participantsScrollRef.current
-    if (!node) return
-
-    const horizontal = node.scrollWidth > node.clientWidth + 4
-    const amount = horizontal ? Math.round(node.clientWidth * 0.86) : Math.round(node.clientHeight * 0.72)
-
-    if (horizontal) {
-      node.scrollBy({ left: direction > 0 ? amount : -amount, behavior: 'smooth' })
-    } else {
-      node.scrollBy({ top: direction > 0 ? amount : -amount, behavior: 'smooth' })
-    }
-    window.setTimeout(updateParticipantsScroll, 220)
-  }
-
-  useEffect(() => {
-    const node = participantsScrollRef.current
-    if (!node) return undefined
-
-    const onScroll = () => updateParticipantsScroll()
-    node.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('resize', onScroll)
-    onScroll()
-
-    return () => {
-      node.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', onScroll)
-    }
-  }, [participants.length])
 
   return (
     <main className="meeting-page">
       <Header title={`Meeting: ${roomName}`} subtitle={`Status: ${meetingStatus}`} />
 
-      {statusError ? <p className="api-error">{statusError}</p> : null}
-      {recordingStatus ? <p className="api-error">{recordingStatus}</p> : null}
-      {controls.record ? (
-        <p className="recording-banner">Recording {formatRecordingLabel(recordingSeconds)}</p>
-      ) : null}
-      {mediaBlocked && !localStream ? (
-        <button className="control-btn active" onClick={handleEnableMedia}>
-          Enable Camera & Mic
-        </button>
-      ) : null}
-      {meetingStatus === 'EXPIRED' ? (
-        <p className="api-error">Meeting expired. Redirecting to dashboard...</p>
-      ) : null}
+      {statusError && <p className="api-error">{statusError}</p>}
+      {recordingStatus && <p className="api-error">{recordingStatus}</p>}
+      {controls.record && <p className="recording-banner">Recording {formatTime(recordingSeconds)}</p>}
+      {meetingStatus === 'EXPIRED' && <p className="api-error">Meeting expired. Redirecting...</p>}
+
       <VideoGrid
         selfName={selfName}
-        selfIsHost={selfIsHost}
-        selfIsScreenSharing={isScreenSharing}
+        selfIsHost={false}
+        selfIsScreenSharing={false}
         selfIsMuted={controls.mute}
         selfIsRecording={controls.record}
         selfCameraOn={controls.camera}
         localStream={localStream}
         participants={participants}
-        onParticipantsContainerReady={registerParticipantsScroller}
-        participantsScroll={participantsScroll}
-        onParticipantsScroll={handleParticipantsScroll}
       />
 
       <ControlBar
@@ -1101,37 +302,11 @@ function MeetingRoom({ onNavigate, roomPath, user }) {
       <NotesPanel
         open={controls.notes}
         onClose={() => handleToggle('notes')}
-        initialValue={noteInitialValue}
+        initialValue=""
         onSave={handleSaveNote}
       />
-
-      <div className="scroll-fabs">
-        <button
-          type="button"
-          className="scroll-fab"
-          onClick={handleScrollTop}
-          aria-label="Scroll to top"
-          disabled={!canScrollTop}
-        >
-          Top
-        </button>
-        <button
-          type="button"
-          className="scroll-fab"
-          onClick={handleScrollBottom}
-          aria-label="Scroll to bottom"
-          disabled={!canScrollBottom}
-        >
-          Down
-        </button>
-      </div>
     </main>
   )
 }
 
 export default MeetingRoom
-
-
-
-
-
