@@ -69,6 +69,8 @@ CST Meet is a cloud-native, real-time video conferencing platform built on AWS s
 - DynamoDB
 - S3
 - Cognito
+- Amazon Bedrock (Nova Micro)
+- Bedrock Knowledge Base (RAG)
 
 **Infrastructure**
 - ECS Fargate
@@ -346,14 +348,234 @@ Returns note content.
 
 **Lambda**: `meetlite_user_data_lambda.py`
 
-### 6. AI Assistant Service
+### 6. AI Assistant Service (Bedrock RAG)
 
-**Endpoint**: POST /meetlite-ai-api
+**Endpoint**: `https://gc4a7icjti.execute-api.ap-south-1.amazonaws.com/dev/meetlite-ai-api`
 
-**Features**:
-- Meeting-related FAQ responses
-- Context-aware assistance
-- Formatted responses with highlights
+**Architecture**: Amazon Bedrock Agent with RAG (Retrieval-Augmented Generation)
+
+#### Overview
+
+The AI Assistant is an intelligent chatbot powered by AWS Bedrock, providing context-aware help for MeetLite users. It uses a RAG model connected to 10+ documentation files stored in S3, enabling accurate responses based on actual product documentation.
+
+#### Architecture Components
+
+**1. Knowledge Base (S3)**
+- **Bucket**: `fields-related-data-of-myapp`
+- **Path**: `cstmeet-ai-docs/`
+- **Format**: Markdown (.md) files
+- **Total Files**: 11 documentation files
+
+**Documentation Structure**:
+```
+s3://fields-related-data-of-myapp/cstmeet-ai-docs/
+├── 01_overview.md              # App overview and capabilities
+├── 02_signup_login.md          # Authentication guide
+├── 03_dashboard.md             # Dashboard features
+├── 04_create_meeting.md        # Meeting creation flow
+├── 05_join_meeting.md          # Joining meetings guide
+├── 06_meeting_room_ui.md       # Meeting interface details
+├── 07_audio_video_controls.md  # Media controls documentation
+├── 08_common_issues.md         # Troubleshooting guide
+├── 09_mobile_usage.md          # Mobile device support
+├── 10_security_privacy.md      # Security features
+└── 11_new_features.md          # Latest updates
+```
+
+**2. Bedrock Agent**
+- **Model**: Amazon Nova Micro
+- **Type**: Foundation Model (FM)
+- **Configuration**: RAG-enabled with S3 knowledge base
+- **Region**: ap-south-1 (Mumbai)
+
+**3. Lambda Integration**
+- **Function**: AI API Handler
+- **Runtime**: Python 3.x
+- **Trigger**: API Gateway POST request
+- **Role**: Bedrock Agent invocation permissions
+
+**4. Frontend Widget**
+- **Component**: `ChatWidget.jsx`
+- **Features**:
+  - Floating chat button on all pages
+  - Quick action buttons for common questions
+  - Rich text formatting with keyword highlighting
+  - Session management for conversation context
+  - Response sanitization (removes source tags, duplicates)
+
+#### API Specification
+
+**Request**:
+```json
+POST /meetlite-ai-api
+{
+  "body": {
+    "message": "How do I create a meeting?",
+    "sessionId": "optional-session-id"
+  }
+}
+```
+
+**Response**:
+```json
+{
+  "statusCode": 200,
+  "body": {
+    "reply": "To create a meeting:\n1. Login to Dashboard\n2. Click Create Meeting button\n3. Copy the generated Meeting ID\n4. Share ID with participants",
+    "sessionId": "session-abc123"
+  }
+}
+```
+
+#### Agent System Prompt
+
+```
+You are CST Meet AI Assistant.
+
+Your job is to help users understand and use CST Meet.
+Always give step-by-step instructions.
+Use simple language.
+Do not guess.
+Answer only from the provided documentation.
+If the user is confused, guide them calmly.
+If a feature does not exist, say so clearly.
+```
+
+#### Features
+
+**1. Context-Aware Responses**
+- Retrieves relevant documentation from S3 via RAG
+- Provides accurate, documentation-based answers
+- Maintains conversation context via session IDs
+
+**2. Quick Actions**
+- "How do I create and share a meeting?"
+- "How do I join using meeting ID?"
+- "Why does it show waiting for video?"
+- "How do Camera and Mute buttons work?"
+- "How do I use notes in a meeting?"
+
+**3. Smart Formatting**
+- Keyword highlighting: Meeting ID, Dashboard, Camera, Mute, Notes, Record
+- Ordered lists for step-by-step instructions
+- Bullet points for feature lists
+- Paragraph formatting for explanations
+
+**4. Fallback Handling**
+- Local fallback responses if API fails
+- Authentication-aware suggestions
+- Network error handling
+
+**5. Response Sanitization**
+- Removes RAG source tags (`<sources>`, `<source>`)
+- Filters duplicate FAQ questions
+- Cleans helper text artifacts
+- Formats inline numbering to proper lists
+
+#### User Experience
+
+**Chat Widget Behavior**:
+1. Floating button labeled "MeetLite AI" on all pages
+2. Click to open chat panel
+3. Welcome message: "Hi, I am MeetLite AI. Ask me how to use any feature."
+4. Quick action buttons for common questions
+5. Type custom questions or click quick actions
+6. Receive formatted, highlighted responses
+7. Clear conversation or close panel
+
+**Integration Points**:
+- Available on Login page (pre-authentication)
+- Available on Dashboard (post-authentication)
+- Available in Meeting Room (offset positioning)
+- Event-driven: Can be triggered programmatically via `meetlite-ai-ask` event
+
+#### Cost Analysis
+
+**Amazon Nova Micro Model Pricing** (ap-south-1 region):
+
+| Metric | Price | Unit |
+|--------|-------|------|
+| Input Tokens | $0.035 | per 1M tokens |
+| Output Tokens | $0.14 | per 1M tokens |
+
+**Token Estimation**:
+
+**Per Request**:
+- Average user question: ~20 tokens
+- System prompt: ~50 tokens
+- Retrieved context (RAG): ~500 tokens
+- **Total Input**: ~570 tokens
+- Average response: ~150 tokens
+- **Total Output**: ~150 tokens
+
+**Cost Per Request**:
+- Input cost: (570 / 1,000,000) × $0.035 = $0.00001995
+- Output cost: (150 / 1,000,000) × $0.14 = $0.000021
+- **Total per request**: ~$0.00004095 (~$0.00004)
+
+**Monthly Cost Projections**:
+
+| Users/Day | Requests/User | Total Requests/Month | Monthly Cost |
+|-----------|---------------|----------------------|-------------|
+| 10 | 3 | 900 | $0.04 |
+| 50 | 3 | 4,500 | $0.18 |
+| 100 | 3 | 9,000 | $0.37 |
+| 500 | 3 | 45,000 | $1.84 |
+| 1,000 | 3 | 90,000 | $3.69 |
+| 5,000 | 3 | 450,000 | $18.43 |
+| 10,000 | 3 | 900,000 | $36.86 |
+
+**Additional AWS Costs**:
+
+| Service | Usage | Monthly Cost (Estimated) |
+|---------|-------|-------------------------|
+| S3 Storage | 11 files (~50 KB total) | $0.001 |
+| S3 GET Requests | RAG retrievals | $0.01 - $0.05 |
+| Lambda Invocations | API handler | $0.02 - $0.10 |
+| API Gateway | REST API calls | $0.035 per 10K requests |
+| Bedrock Knowledge Base | RAG indexing | $0.00 (one-time) |
+
+**Total Monthly Cost Example** (1,000 users):
+- Nova Micro tokens: $3.69
+- S3 + Lambda + API Gateway: ~$0.15
+- **Total**: ~$3.84/month
+
+**Cost Optimization**:
+1. **Nova Micro** is the most cost-effective Bedrock model
+2. **Small documentation files** reduce RAG retrieval tokens
+3. **Session management** reduces redundant context loading
+4. **Client-side fallbacks** reduce unnecessary API calls
+5. **Response caching** (future): Cache common questions
+
+**Comparison with Alternatives**:
+
+| Model | Input (per 1M) | Output (per 1M) | Cost per Request |
+|-------|----------------|-----------------|------------------|
+| Nova Micro | $0.035 | $0.14 | $0.00004 |
+| Nova Lite | $0.06 | $0.24 | $0.00007 |
+| Claude 3 Haiku | $0.25 | $1.25 | $0.00033 |
+| GPT-3.5 Turbo | $0.50 | $1.50 | $0.00051 |
+
+**Nova Micro provides 8-12x cost savings** compared to other models while maintaining quality for FAQ/documentation tasks.
+
+#### Benefits of RAG Architecture
+
+1. **Accuracy**: Responses based on actual documentation, not hallucinations
+2. **Maintainability**: Update docs in S3 without retraining
+3. **Scalability**: Bedrock handles scaling automatically
+4. **Cost-Effective**: Pay only for tokens used
+5. **Low Latency**: Nova Micro optimized for speed
+6. **Version Control**: Documentation files tracked in Git
+7. **Easy Updates**: Upload new .md files to S3 to expand knowledge
+
+#### Future Enhancements
+
+- **Feedback Loop**: User ratings on AI responses
+- **Analytics**: Track common questions to improve docs
+- **Multi-language**: Support for regional languages
+- **Voice Input**: Speech-to-text integration
+- **Proactive Help**: Context-aware suggestions based on user actions
+- **Response Caching**: Cache frequent questions to reduce costs
 
 ---
 
@@ -399,9 +621,21 @@ fields-related-data-of-myapp/
 ├── meetlite-user-recordings/
 │   └── {email}/
 │       └── {timestamp}_{meetingId}.webm
-└── meetlite-user-notes/
-    └── {email}/
-        └── {timestamp}_{meetingId}.txt
+├── meetlite-user-notes/
+│   └── {email}/
+│       └── {timestamp}_{meetingId}.txt
+└── cstmeet-ai-docs/
+    ├── 01_overview.md
+    ├── 02_signup_login.md
+    ├── 03_dashboard.md
+    ├── 04_create_meeting.md
+    ├── 05_join_meeting.md
+    ├── 06_meeting_room_ui.md
+    ├── 07_audio_video_controls.md
+    ├── 08_common_issues.md
+    ├── 09_mobile_usage.md
+    ├── 10_security_privacy.md
+    └── 11_new_features.md
 ```
 
 ---
