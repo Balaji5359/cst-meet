@@ -30,6 +30,11 @@ This document provides a detailed AWS cost estimation for **CST Meet**, based on
 - Amazon Cognito
 - Amazon S3 (minimal usage)
 
+### AI Services
+- Amazon Bedrock (Nova Micro model)
+- Bedrock Knowledge Base (RAG)
+- S3 (AI documentation storage)
+
 ---
 
 ## ECS Fargate Cost (Primary Fixed Cost)
@@ -124,6 +129,28 @@ Tables:
 
 ---
 
+## Amazon Bedrock (Nova Micro) - AI Assistant
+
+**Model**: Nova Micro (Foundation Model with RAG)
+
+**Pricing (ap-south-1)**:
+- Input tokens: $0.035 per 1M tokens
+- Output tokens: $0.14 per 1M tokens
+
+**Usage Assumptions (10 users)**:
+- 3 AI requests per user per day
+- Average input: ~570 tokens (question + system prompt + RAG context)
+- Average output: ~150 tokens
+
+| Duration | Requests | Input Cost | Output Cost | Total |
+|----------|----------|------------|-------------|-------|
+| 1 Day | 30 | $0.0006 | $0.0004 | $0.001 |
+| 1 Month | 900 | $0.018 | $0.019 | $0.04 |
+
+**S3 Storage (AI Docs)**: 11 MD files (~50 KB) = $0.001/month
+
+---
+
 ## Route 53
 
 - Hosted Zone: $0.50/month
@@ -142,7 +169,7 @@ Tables:
 
 ## Final Cost Summary
 
-### 1-Day Estimate
+### 1-Day Estimate (10 Users)
 
 | Service | Cost |
 |-------|------|
@@ -151,11 +178,18 @@ Tables:
 | API Gateway | $0.05 |
 | DynamoDB | $0.02 |
 | CloudFront | $0.02 |
-| **Total** | **≈ $1.44 (~₹120)** |
+| **Bedrock AI (Nova Micro)** | **$0.01** |
+| **Total** | **≈ $1.43 (~₹120)** |
+
+**AI Cost Breakdown (10 users, 3 requests/user/day)**:
+- Total requests: 30
+- Input tokens: ~570 per request
+- Output tokens: ~150 per request
+- Cost: (30 × 570 / 1M × $0.035) + (30 × 150 / 1M × $0.14) = $0.0006 + $0.00042 ≈ $0.001
 
 ---
 
-### 1-Month Estimate
+### 1-Month Estimate (10 Users)
 
 | Service | Cost |
 |-------|------|
@@ -168,7 +202,16 @@ Tables:
 | ECR | $0.20 |
 | Route 53 | $0.50 |
 | CloudFront | $0.75 |
-| **Total** | **≈ $44 – $46 (~₹3,700 – ₹3,900)** |
+| **Bedrock AI (Nova Micro)** | **$0.04** |
+| **S3 (AI Docs Storage)** | **$0.001** |
+| **Total** | **≈ $44.70 (~₹3,750)** |
+
+**AI Cost Breakdown (10 users, 3 requests/user/day, 30 days)**:
+- Total requests: 900
+- Input cost: (900 × 570 / 1M × $0.035) = $0.018
+- Output cost: (900 × 150 / 1M × $0.14) = $0.019
+- S3 storage: 11 files (~50 KB) = $0.001
+- **Total AI cost: $0.038 ≈ $0.04**
 
 ---
 

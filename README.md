@@ -69,6 +69,8 @@ CST Meet is a cloud-native, real-time video conferencing platform built on AWS s
 - DynamoDB
 - S3
 - Cognito
+- Amazon Bedrock (Nova Micro)
+- Bedrock Knowledge Base (RAG)
 
 **Infrastructure**
 - ECS Fargate
@@ -346,14 +348,25 @@ Returns note content.
 
 **Lambda**: `meetlite_user_data_lambda.py`
 
-### 6. AI Assistant Service
+### 6. AI Assistant Service (Bedrock RAG)
 
-**Endpoint**: POST /meetlite-ai-api
+**Endpoint**: `https://gc4a7icjti.execute-api.ap-south-1.amazonaws.com/dev/meetlite-ai-api`
+
+**Architecture**: Amazon Bedrock Agent with RAG (Retrieval-Augmented Generation)
+
+**Model**: Amazon Nova Micro (Foundation Model)
+
+**Knowledge Base**:
+- **S3 Bucket**: `fields-related-data-of-myapp/cstmeet-ai-docs/`
+- **Format**: 11 Markdown (.md) documentation files
+- **Files**: 01_overview.md, 02_signup_login.md, 03_dashboard.md, 04_create_meeting.md, 05_join_meeting.md, 06_meeting_room_ui.md, 07_audio_video_controls.md, 08_common_issues.md, 09_mobile_usage.md, 10_security_privacy.md, 11_new_features.md
 
 **Features**:
-- Meeting-related FAQ responses
-- Context-aware assistance
-- Formatted responses with highlights
+- RAG-powered responses from actual documentation
+- Context-aware assistance with session management
+- Formatted responses with keyword highlighting
+- Quick action buttons for common questions
+- Floating chat widget on all pages
 
 ---
 
@@ -399,9 +412,21 @@ fields-related-data-of-myapp/
 ├── meetlite-user-recordings/
 │   └── {email}/
 │       └── {timestamp}_{meetingId}.webm
-└── meetlite-user-notes/
-    └── {email}/
-        └── {timestamp}_{meetingId}.txt
+├── meetlite-user-notes/
+│   └── {email}/
+│       └── {timestamp}_{meetingId}.txt
+└── cstmeet-ai-docs/
+    ├── 01_overview.md
+    ├── 02_signup_login.md
+    ├── 03_dashboard.md
+    ├── 04_create_meeting.md
+    ├── 05_join_meeting.md
+    ├── 06_meeting_room_ui.md
+    ├── 07_audio_video_controls.md
+    ├── 08_common_issues.md
+    ├── 09_mobile_usage.md
+    ├── 10_security_privacy.md
+    └── 11_new_features.md
 ```
 
 ---
